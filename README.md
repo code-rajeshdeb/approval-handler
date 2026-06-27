@@ -139,6 +139,43 @@ Every action logged to PostgreSQL:
 
 Export for compliance: SOC2, ISO 27001, GDPR audits.
 
+
+---
+
+## 📸 Product Screenshots
+
+### Slack Access Request Modal
+![Slack Request Form](screenshots/slack-modal-full-form.png)
+*User-friendly Slack modal for submitting access requests - no context switching required*
+
+### Approval Team Selection
+![Approval Team Dropdown](screenshots/slack-modal-approval-team.png)
+*Smart team routing - requests go directly to the right approvers*
+
+### Admin Dashboard
+![Admin Dashboard](screenshots/admin-dashboard.png)
+*Centralized view of all requests, approval workflow visualization, and real-time stats*
+
+### Rules Management
+![Approval Rules](screenshots/rules-management.png)
+*Priority-based rule engine - configure auto-approve vs manual approval based on conditions*
+
+### Rule Creation Interface
+![Create New Rule](screenshots/rule-creation-form.png)
+*Intuitive rule builder with match conditions and approval level configuration*
+
+### Request History & Audit Trail
+![Request History](screenshots/request-history.png)
+*Complete audit log - WHO requested WHAT, WHO approved, and execution status*
+
+### IAM Role Catalog
+![Role Catalog Management](screenshots/catalog-management.png)
+*Configurable catalog of available services and IAM roles shown in Slack forms*
+
+### Teams & Approval Groups
+![Teams Management](screenshots/teams-management.png)
+*Map engineering teams to their approval groups for intelligent routing*
+
 ---
 
 ## 🏗️ Architecture
