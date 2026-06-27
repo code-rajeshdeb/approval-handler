@@ -624,7 +624,7 @@ This tool was built by a DevOps engineer who was tired of:
 
 - **Issues**: https://github.com/code-rajeshdeb/approval-handler/issues
 - **Discussions**: https://github.com/code-rajeshdeb/approval-handler/discussions
-- **Email**: your-email@example.com
+- **Email**: rdeb9595@gmail.com
 
 ---
 
