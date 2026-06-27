@@ -1,0 +1,330 @@
+{% extends "base.html" %}
+{% block nav_catalog %}font-bold text-white{% endblock %}
+{% block title %}IAM Role Catalog - Access Control{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-800">IAM Role Catalog</h1>
+    <p class="text-sm text-gray-500 mt-1">Manage service categories and their IAM roles shown in the Slack form</p>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-4 gap-6">
+
+  <!-- ──────────── Left Column: Categories ──────────── -->
+  <div class="lg:col-span-1 space-y-4">
+
+    <!-- Category List -->
+    <div class="bg-white rounded-lg shadow">
+      <div class="px-4 py-3 border-b flex items-center justify-between">
+        <h3 class="font-semibold text-gray-700 text-sm">Service Categories</h3>
+        <span class="text-xs text-gray-400">{{ categories|length }}</span>
+      </div>
+      <div class="divide-y max-h-[60vh] overflow-y-auto">
+        {% for cat in categories %}
+        <a href="/admin/catalog?category={{ cat.category_key }}"
+           class="block px-4 py-3 hover:bg-gray-50 transition {{ 'bg-blue-50 border-l-4 border-l-blue-500' if cat.category_key == selected_key else '' }}">
+          <div class="flex items-center justify-between">
+            <div class="min-w-0">
+              <span class="text-sm font-medium {{ 'text-blue-700' if cat.category_key == selected_key else 'text-gray-800' }}">
+                {{ cat.label }}
+              </span>
+              <p class="text-xs text-gray-400 truncate">{{ cat.category_key }}</p>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              {% if cat.resource_level %}
+              <span class="w-2 h-2 rounded-full bg-purple-400" title="Has resource field"></span>
+              {% endif %}
+              <span class="w-2.5 h-2.5 rounded-full {{ 'bg-green-400' if cat.enabled else 'bg-gray-300' }}"
+                    title="{{ 'Enabled' if cat.enabled else 'Disabled' }}"></span>
+            </div>
+          </div>
+        </a>
+        {% else %}
+        <div class="px-4 py-6 text-center text-gray-400 text-sm">No categories yet</div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- Add Category Form -->
+    <div class="bg-white rounded-lg shadow p-4" x-data="{ open: false }">
+      <button @click="open = !open" class="w-full flex items-center justify-between text-sm font-medium text-blue-600 hover:text-blue-800">
+        <span>+ Add Category</span>
+        <svg class="w-4 h-4 transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <form method="POST" action="/admin/catalog/category/add" class="mt-3 space-y-3" x-show="open" x-cloak>
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1">Category Key</label>
+          <input type="text" name="category_key" required placeholder="e.g., cloud-functions"
+                 class="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1">Display Label</label>
+          <input type="text" name="label" required placeholder="e.g., Cloud Functions"
+                 class="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div class="flex gap-3">
+          <div class="flex-1">
+            <label class="block text-xs font-medium text-gray-500 mb-1">Sort Order</label>
+            <input type="number" name="sort_order" value="100"
+                   class="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+        </div>
+        <label class="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" name="resource_level" value="true" class="rounded border-gray-300 text-blue-600">
+          <span class="text-gray-600">Requires resource name</span>
+        </label>
+        <div>
+          <label class="block text-xs font-medium text-gray-500 mb-1">Resource Placeholder</label>
+          <input type="text" name="resource_placeholder" placeholder="e.g., my-bucket-name"
+                 class="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <button type="submit" class="w-full bg-blue-600 text-white px-3 py-1.5 rounded-md text-sm hover:bg-blue-700">
+          Add Category
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- ──────────── Right Column: Selected Category + Roles ──────────── -->
+  <div class="lg:col-span-3 space-y-4">
+
+    {% if selected_cat %}
+    <!-- Category Settings -->
+    <div class="bg-white rounded-lg shadow" x-data="{ editing: false }">
+      <!-- View Mode -->
+      <div class="px-5 py-4 flex items-center justify-between" x-show="!editing">
+        <div class="flex items-center gap-4">
+          <span class="flex-shrink-0 w-12 h-12 rounded-lg {{ 'bg-blue-100 text-blue-700' if selected_cat.enabled else 'bg-gray-100 text-gray-400' }} flex items-center justify-center font-bold text-sm">
+            {{ selected_cat.label[:2].upper() }}
+          </span>
+          <div>
+            <div class="flex items-center gap-2">
+              <h2 class="text-lg font-bold text-gray-800">{{ selected_cat.label }}</h2>
+              <span class="px-2 py-0.5 rounded-full text-xs font-medium {{ 'bg-green-100 text-green-700' if selected_cat.enabled else 'bg-gray-100 text-gray-500' }}">
+                {{ 'Enabled' if selected_cat.enabled else 'Disabled' }}
+              </span>
+            </div>
+            <p class="text-sm text-gray-500">
+              Key: <code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs">{{ selected_cat.category_key }}</code>
+              · Sort: {{ selected_cat.sort_order }}
+              {% if selected_cat.resource_level %}
+              · <span class="text-purple-600">Resource field: <code class="bg-purple-50 px-1 py-0.5 rounded text-xs">{{ selected_cat.resource_placeholder or 'resource-name' }}</code></span>
+              {% endif %}
+            </p>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <form method="POST" action="/admin/catalog/category/{{ selected_cat.category_key }}/toggle">
+            <button type="submit"
+                    class="text-sm px-3 py-1.5 border rounded-md {{ 'border-yellow-300 text-yellow-700 hover:bg-yellow-50' if selected_cat.enabled else 'border-green-300 text-green-700 hover:bg-green-50' }}">
+              {{ 'Disable' if selected_cat.enabled else 'Enable' }}
+            </button>
+          </form>
+          <button @click="editing = true"
+                  class="text-blue-600 hover:text-blue-800 text-sm px-3 py-1.5 border border-blue-200 rounded-md hover:bg-blue-50">
+            Edit
+          </button>
+          <form method="POST" action="/admin/catalog/category/{{ selected_cat.category_key }}/delete"
+                onsubmit="return confirm('Delete category \'{{ selected_cat.label }}\' and ALL its roles? This cannot be undone.')">
+            <button type="submit" class="text-red-500 hover:text-red-700 text-sm px-3 py-1.5 border border-red-200 rounded-md hover:bg-red-50">
+              Delete
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <!-- Edit Mode -->
+      <div class="px-5 py-4 border-t-2 border-blue-200 bg-blue-50/30" x-show="editing" x-cloak>
+        <form method="POST" action="/admin/catalog/category/{{ selected_cat.category_key }}/update" class="space-y-3">
+          <div class="grid grid-cols-3 gap-3">
+            <div class="col-span-2">
+              <label class="block text-xs font-medium text-gray-500 mb-1">Display Label</label>
+              <input type="text" name="label" value="{{ selected_cat.label }}" required
+                     class="border border-gray-300 rounded-md px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+            <div>
+              <label class="block text-xs font-medium text-gray-500 mb-1">Sort Order</label>
+              <input type="number" name="sort_order" value="{{ selected_cat.sort_order }}"
+                     class="border border-gray-300 rounded-md px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+            </div>
+          </div>
+          <label class="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" name="resource_level" value="true"
+                   {{ 'checked' if selected_cat.resource_level else '' }}
+                   class="rounded border-gray-300 text-blue-600">
+            <span class="text-gray-600">Requires resource name</span>
+          </label>
+          <div>
+            <label class="block text-xs font-medium text-gray-500 mb-1">Resource Placeholder</label>
+            <input type="text" name="resource_placeholder" value="{{ selected_cat.resource_placeholder or '' }}"
+                   placeholder="e.g., my-bucket-name"
+                   class="border border-gray-300 rounded-md px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+          </div>
+          <div class="flex gap-2">
+            <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-md text-sm hover:bg-blue-700">Save</button>
+            <button type="button" @click="editing = false"
+                    class="text-gray-500 hover:text-gray-700 px-3 py-2 rounded-md text-sm border border-gray-300 hover:bg-gray-50">Cancel</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Roles Table -->
+    <div class="bg-white rounded-lg shadow">
+      <div class="px-5 py-4 border-b flex items-center justify-between">
+        <div>
+          <h3 class="font-semibold text-gray-700">IAM Roles</h3>
+          <p class="text-xs text-gray-400 mt-0.5">{{ roles|length }} role{{ 's' if roles|length != 1 else '' }} in {{ selected_cat.label }}</p>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-10">Status</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Display Name</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role Value</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Description</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase w-16">Order</th>
+              <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase w-32">Actions</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y">
+            {% for role in roles %}
+            <tr class="{{ 'opacity-50' if not role.enabled else '' }} hover:bg-gray-50"
+                x-data="{ editing: false }">
+              <!-- View cells -->
+              <td class="px-4 py-3" x-show="!editing">
+                <form method="POST" action="/admin/catalog/role/{{ role.id }}/toggle">
+                  <button type="submit" title="{{ 'Disable' if role.enabled else 'Enable' }}">
+                    {% if role.enabled %}
+                    <svg class="w-5 h-5 text-green-500" fill="currentColor" viewBox="0 0 20 20">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                    </svg>
+                    {% else %}
+                    <svg class="w-5 h-5 text-gray-300" fill="currentColor" viewBox="0 0 20 20">
+                      <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+                    </svg>
+                    {% endif %}
+                  </button>
+                </form>
+              </td>
+              <td class="px-4 py-3 font-medium text-gray-800" x-show="!editing">{{ role.display_name }}</td>
+              <td class="px-4 py-3" x-show="!editing">
+                <code class="bg-gray-100 px-1.5 py-0.5 rounded text-xs text-gray-600">{{ role.role_value }}</code>
+              </td>
+              <td class="px-4 py-3 text-gray-500 text-xs max-w-xs truncate" x-show="!editing" title="{{ role.description or '' }}">
+                {{ role.description or '—' }}
+              </td>
+              <td class="px-4 py-3 text-gray-400" x-show="!editing">{{ role.sort_order }}</td>
+              <td class="px-4 py-3 text-right" x-show="!editing">
+                <div class="flex items-center justify-end gap-1">
+                  <button @click="editing = true" class="text-blue-500 hover:text-blue-700 p-1" title="Edit">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/>
+                    </svg>
+                  </button>
+                  <form method="POST" action="/admin/catalog/role/{{ role.id }}/delete"
+                        onsubmit="return confirm('Delete role {{ role.display_name }}?')">
+                    <button type="submit" class="text-red-400 hover:text-red-600 p-1" title="Delete">
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                      </svg>
+                    </button>
+                  </form>
+                </div>
+              </td>
+
+              <!-- Inline edit row -->
+              <td colspan="6" x-show="editing" x-cloak class="px-4 py-3 bg-blue-50/40">
+                <form method="POST" action="/admin/catalog/role/{{ role.id }}/update" class="flex items-end gap-2">
+                  <div class="flex-1">
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Display Name</label>
+                    <input type="text" name="display_name" value="{{ role.display_name }}" required
+                           class="border border-gray-300 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-blue-500">
+                  </div>
+                  <div class="flex-1">
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Role Value</label>
+                    <input type="text" name="role_value" value="{{ role.role_value }}" required
+                           class="border border-gray-300 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-blue-500">
+                  </div>
+                  <div class="flex-[2]">
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Description</label>
+                    <input type="text" name="description" value="{{ role.description or '' }}"
+                           class="border border-gray-300 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-blue-500">
+                  </div>
+                  <div class="w-16">
+                    <label class="block text-xs font-medium text-gray-500 mb-1">Order</label>
+                    <input type="number" name="sort_order" value="{{ role.sort_order }}"
+                           class="border border-gray-300 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-blue-500">
+                  </div>
+                  <button type="submit" class="bg-blue-600 text-white px-3 py-1.5 rounded text-sm hover:bg-blue-700 flex-shrink-0">Save</button>
+                  <button type="button" @click="editing = false"
+                          class="text-gray-500 px-2 py-1.5 rounded text-sm border border-gray-300 hover:bg-gray-50 flex-shrink-0">✕</button>
+                </form>
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="6" class="px-4 py-8 text-center text-gray-400">
+                No IAM roles in this category yet. Add one below.
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Add Role Form -->
+      <div class="px-5 py-4 border-t bg-gray-50">
+        <h4 class="text-sm font-medium text-gray-600 mb-3">Add New Role</h4>
+        <form method="POST" action="/admin/catalog/role/add" class="flex items-end gap-2">
+          <input type="hidden" name="category_key" value="{{ selected_cat.category_key }}">
+          <div class="flex-1">
+            <label class="block text-xs font-medium text-gray-500 mb-1">Display Name</label>
+            <input type="text" name="display_name" required placeholder="e.g., Viewer"
+                   class="border border-gray-300 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-blue-500">
+          </div>
+          <div class="flex-1">
+            <label class="block text-xs font-medium text-gray-500 mb-1">Role Value</label>
+            <input type="text" name="role_value" required placeholder="e.g., roles/viewer"
+                   class="border border-gray-300 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-blue-500">
+          </div>
+          <div class="flex-[2]">
+            <label class="block text-xs font-medium text-gray-500 mb-1">Description</label>
+            <input type="text" name="description" placeholder="e.g., Read-only access to all resources"
+                   class="border border-gray-300 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-blue-500">
+          </div>
+          <div class="w-16">
+            <label class="block text-xs font-medium text-gray-500 mb-1">Order</label>
+            <input type="number" name="sort_order" value="100"
+                   class="border border-gray-300 rounded px-2 py-1.5 text-sm w-full focus:outline-none focus:ring-1 focus:ring-blue-500">
+          </div>
+          <button type="submit" class="bg-green-600 text-white px-4 py-1.5 rounded text-sm hover:bg-green-700 flex-shrink-0">
+            + Add Role
+          </button>
+        </form>
+      </div>
+    </div>
+
+    {% else %}
+    <!-- No category selected / empty state -->
+    <div class="bg-white rounded-lg shadow p-12 text-center">
+      <svg class="w-16 h-16 text-gray-300 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>
+      </svg>
+      <h3 class="text-lg font-medium text-gray-600 mb-2">No Categories Found</h3>
+      <p class="text-gray-400 text-sm">Add a service category using the form on the left to get started.</p>
+    </div>
+    {% endif %}
+
+  </div>
+</div>
+
+<script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+{% endblock %}

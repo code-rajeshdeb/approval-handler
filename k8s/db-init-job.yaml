@@ -1,0 +1,118 @@
+# =============================================================================
+# Job: Database Schema Initialization for Access Control DB
+# =============================================================================
+# One-time job that runs the SQL schema + seed data from db-init-configmap.yaml
+# against the CNPG PostgreSQL cluster.
+#
+# Prerequisites:
+#   1. CNPG cluster 'access-control-db' is Running (pg-cluster.yaml)
+#   2. Secret 'access-control-db-credentials' exists (external-secret-db.yaml)
+#   3. ConfigMap 'db-init-schema' exists (db-init-configmap.yaml)
+#
+# Usage:
+#   kubectl apply -f db-init-configmap.yaml
+#   kubectl apply -f db-init-job.yaml
+#
+# Re-run (if needed — schema is idempotent):
+#   kubectl delete job access-control-db-init -n argo-access-control
+#   kubectl apply -f db-init-job.yaml
+#
+# Verify:
+#   kubectl logs -n argo-access-control job/access-control-db-init
+# =============================================================================
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: access-control-db-init
+  namespace: argo-access-control
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+  labels:
+    app: access-control
+    component: database-init
+    app.kubernetes.io/part-of: argo-access-control
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: access-control
+        component: database-init
+        app.kubernetes.io/part-of: argo-access-control
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: db-init
+          image: ghcr.io/cloudnative-pg/postgresql:18
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              echo "=== Access Control DB Init ==="
+              echo "Connecting to: access-control-db-rw.argo-access-control.svc.cluster.local:5432"
+              echo "Database: access_control"
+              echo ""
+
+              # Wait for the database to be ready
+              for i in $(seq 1 30); do
+                if PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" -c "SELECT 1" > /dev/null 2>&1; then
+                  echo "Database is ready."
+                  break
+                fi
+                echo "Waiting for database... attempt $i/30"
+                sleep 5
+              done
+
+              # Run the schema init SQL
+              echo "Running schema initialization..."
+              PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+                -v ON_ERROR_STOP=1 \
+                -f /sql/init.sql
+
+              echo ""
+              echo "=== Schema initialization complete ==="
+              echo ""
+
+              # Print summary
+              echo "--- Tables ---"
+              PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+                -c "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename;"
+
+              echo "--- Approval Rules ---"
+              PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+                -c "SELECT name, priority, approvers_required, approval_levels FROM approval_rules ORDER BY priority;"
+
+              echo "--- Approver Groups ---"
+              PGPASSWORD="$PGPASSWORD" psql -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE" \
+                -c "SELECT g.group_name, COUNT(m.id) as members FROM approver_groups g LEFT JOIN approver_group_members m ON g.id = m.group_id GROUP BY g.group_name ORDER BY g.group_name;"
+          env:
+            # Cloud SQL instance at 10.0.0.100 (private IP, VPC-peered)
+            # Migrated from CNPG on 2026-05-28
+            - name: PGHOST
+              value: "10.0.0.100"
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: "access_control"
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: access-control-db-credentials
+                  key: username
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: access-control-db-credentials
+                  key: password
+          volumeMounts:
+            - name: sql-schema
+              mountPath: /sql
+              readOnly: true
+      volumes:
+        - name: sql-schema
+          configMap:
+            name: db-init-schema

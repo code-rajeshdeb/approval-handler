@@ -1,0 +1,313 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if rule else 'New' }} Rule - Arcana Access Control{% endblock %}
+{% block nav_rules %}!text-white font-medium{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <a href="/admin/rules" class="text-blue-600 hover:underline text-sm">&larr; Back to Rules</a>
+</div>
+
+<div class="max-w-3xl">
+  <h1 class="text-2xl font-bold mb-6">{{ 'Edit Rule: ' + rule.name if rule else 'New Rule' }}</h1>
+
+  <form method="POST" action="/admin/rules/save" class="space-y-6">
+    {% if rule %}
+    <input type="hidden" name="rule_id" value="{{ rule.id }}">
+    {% endif %}
+
+    <!-- Section 1: Identity -->
+    <div class="bg-white rounded-lg shadow p-5 space-y-4">
+      <h3 class="font-semibold text-gray-800 flex items-center gap-2">
+        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
+        Rule Identity
+      </h3>
+
+      <div class="grid grid-cols-3 gap-4">
+        <div class="col-span-2">
+          <label class="block text-sm font-medium text-gray-700 mb-1">Rule Name</label>
+          <input type="text" name="name" required value="{{ rule.name if rule else '' }}"
+                 placeholder="e.g. prod-editor-requires-approval"
+                 class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Priority</label>
+          <input type="number" name="priority" value="{{ rule.priority if rule else 100 }}"
+                 class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+          <p class="text-xs text-gray-400 mt-1">Lower = evaluated first (10, 20, 30...)</p>
+        </div>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Description</label>
+        <input type="text" name="description" value="{{ rule.description if rule and rule.description else '' }}"
+               placeholder="What does this rule do? e.g. 'Prod admin access needs 2-level approval + ticket'"
+               class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+      </div>
+
+      <label class="flex items-center gap-2 text-sm cursor-pointer">
+        <input type="checkbox" name="enabled" id="enabled" value="true"
+               class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+               {{ 'checked' if (rule and rule.enabled) or not rule else '' }}>
+        <span class="text-gray-700 font-medium">Enabled</span>
+        <span class="text-gray-400 text-xs">(disabled rules are skipped during evaluation)</span>
+      </label>
+    </div>
+
+    <!-- Section 2: Match Conditions -->
+    <div class="bg-white rounded-lg shadow p-5 space-y-4">
+      <div>
+        <h3 class="font-semibold text-gray-800 flex items-center gap-2">
+          <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
+          Match Conditions
+        </h3>
+        <p class="text-xs text-gray-400 mt-1">Leave a condition empty to match any value. All non-empty conditions must match (AND logic).</p>
+      </div>
+
+      <!-- Requester Email -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-1">Requester Email</label>
+        <input type="text" name="requester_email" value="{{ rule.requester_email if rule and rule.requester_email else '' }}"
+               placeholder="Leave empty to match any requester"
+               class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+        <p class="text-xs text-gray-400 mt-1">Comma-separated for multiple. Supports wildcard: *@arcana.io</p>
+      </div>
+
+      <!-- Who Type -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-2">Who Type</label>
+        {% set wt_values = (rule.who_type or '').split(',') | map('trim') | list if rule and rule.who_type else [] %}
+        <div class="flex flex-wrap gap-3">
+          {% for val, label in [('user', 'User'), ('group', 'Group'), ('serviceAccount', 'Service Account'), ('vault-secret', 'Vault Secret')] %}
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer px-3 py-1.5 rounded-md border {{ 'border-indigo-300 bg-indigo-50' if val in wt_values else 'border-gray-200 hover:border-gray-300' }}">
+            <input type="checkbox" class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" data-group="who_type" value="{{ val }}" {{ 'checked' if val in wt_values else '' }}>
+            {{ label }}
+          </label>
+          {% endfor %}
+        </div>
+        <input type="hidden" name="who_type" id="who_type_hidden" value="{{ rule.who_type if rule and rule.who_type else '' }}">
+        <p class="text-xs text-gray-400 mt-1.5">None selected = match any who type</p>
+      </div>
+
+      <!-- Service Category / Resource Type -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-2">Service Category (resource_type)</label>
+        {% set rt_values = (rule.resource_type or '').split(',') | map('trim') | list if rule and rule.resource_type else [] %}
+        <div class="flex flex-wrap gap-3">
+          {% for val, label in [('basic', 'Basic'), ('bigquery', 'BigQuery'), ('gcs-bucket', 'Cloud Storage'), ('compute-vm', 'Compute Engine'), ('gke-cluster', 'Kubernetes Engine'), ('cloud-sql', 'Cloud SQL'), ('service-account', 'Service Accounts'), ('pubsub', 'Pub/Sub'), ('secret-manager', 'Secret Manager'), ('artifact-registry', 'Artifact Registry'), ('cloud-logging', 'Cloud Logging'), ('cloud-monitoring', 'Cloud Monitoring'), ('cloud-composer', 'Cloud Composer'), ('custom', 'Custom Role'), ('vault-secret', 'Vault Secret')] %}
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer px-3 py-1.5 rounded-md border {{ 'border-purple-300 bg-purple-50' if val in rt_values else 'border-gray-200 hover:border-gray-300' }}">
+            <input type="checkbox" class="rounded border-gray-300 text-purple-600 focus:ring-purple-500" data-group="resource_type" value="{{ val }}" {{ 'checked' if val in rt_values else '' }}>
+            {{ label }}
+          </label>
+          {% endfor %}
+        </div>
+        <input type="hidden" name="resource_type" id="resource_type_hidden" value="{{ rule.resource_type if rule and rule.resource_type else '' }}">
+        <p class="text-xs text-gray-400 mt-1.5">None selected = match any service category. v2.0.0 uses service category slugs as resource_type.</p>
+      </div>
+
+      <!-- Permission Level -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-2">Permission Level</label>
+        {% set pl_values = (rule.permission_level or '').split(',') | map('trim') | list if rule and rule.permission_level else [] %}
+        <div class="flex flex-wrap gap-3">
+          {% for val, label in [('viewer', 'Viewer'), ('editor', 'Editor'), ('admin', 'Admin'), ('custom', 'Custom'), ('none', 'None (custom role)')] %}
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer px-3 py-1.5 rounded-md border {{ 'border-amber-300 bg-amber-50' if val in pl_values else 'border-gray-200 hover:border-gray-300' }}">
+            <input type="checkbox" class="rounded border-gray-300 text-amber-600 focus:ring-amber-500" data-group="permission_level" value="{{ val }}" {{ 'checked' if val in pl_values else '' }}>
+            {{ label }}
+          </label>
+          {% endfor %}
+        </div>
+        <input type="hidden" name="permission_level" id="permission_level_hidden" value="{{ rule.permission_level if rule and rule.permission_level else '' }}">
+        <p class="text-xs text-gray-400 mt-1.5">None selected = match any permission level</p>
+      </div>
+
+      <!-- GCP Project -->
+      <div>
+        <label class="block text-sm font-medium text-gray-700 mb-2">GCP Project</label>
+        {% set gp_values = (rule.gcp_project or '').split(',') | map('trim') | list if rule and rule.gcp_project else [] %}
+        <div class="flex flex-wrap gap-3">
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer px-3 py-1.5 rounded-md border {{ 'border-cyan-300 bg-cyan-50' if 'arcana-stage-363819' in gp_values else 'border-gray-200 hover:border-gray-300' }}">
+            <input type="checkbox" class="rounded border-gray-300 text-cyan-600 focus:ring-cyan-500" data-group="gcp_project" value="arcana-stage-363819" {{ 'checked' if 'arcana-stage-363819' in gp_values else '' }}>
+            Stage
+          </label>
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer px-3 py-1.5 rounded-md border {{ 'border-cyan-300 bg-cyan-50' if 'arcana-prod-356718' in gp_values else 'border-gray-200 hover:border-gray-300' }}">
+            <input type="checkbox" class="rounded border-gray-300 text-cyan-600 focus:ring-cyan-500" data-group="gcp_project" value="arcana-prod-356718" {{ 'checked' if 'arcana-prod-356718' in gp_values else '' }}>
+            Prod
+          </label>
+          <label class="flex items-center gap-1.5 text-sm cursor-pointer px-3 py-1.5 rounded-md border {{ 'border-cyan-300 bg-cyan-50' if 'arcana-data' in gp_values else 'border-gray-200 hover:border-gray-300' }}">
+            <input type="checkbox" class="rounded border-gray-300 text-cyan-600 focus:ring-cyan-500" data-group="gcp_project" value="arcana-data" {{ 'checked' if 'arcana-data' in gp_values else '' }}>
+            Data
+          </label>
+        </div>
+        <input type="hidden" name="gcp_project" id="gcp_project_hidden" value="{{ rule.gcp_project if rule and rule.gcp_project else '' }}">
+        <p class="text-xs text-gray-400 mt-1.5">None selected = match any project</p>
+      </div>
+
+      <!-- Action & Access Type -->
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-2">Action</label>
+          {% set act_values = (rule.action or '').split(',') | map('trim') | list if rule and rule.action else [] %}
+          <div class="flex flex-wrap gap-2">
+            <span class="text-xs text-gray-400 w-full">IAM</span>
+            {% for val, label in [('grant', 'Grant'), ('revoke', 'Revoke')] %}
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer px-3 py-1.5 rounded-md border {{ 'border-pink-300 bg-pink-50' if val in act_values else 'border-gray-200 hover:border-gray-300' }}">
+              <input type="checkbox" class="rounded border-gray-300 text-pink-600 focus:ring-pink-500" data-group="action_field" value="{{ val }}" {{ 'checked' if val in act_values else '' }}>
+              {{ label }}
+            </label>
+            {% endfor %}
+            <span class="text-xs text-gray-400 w-full mt-1">Vault</span>
+            {% for val, label in [('read-keys-only', 'Read Keys Only'), ('add-or-update-key', 'Add or Update Key'), ('create-new-path', 'Create New Path')] %}
+            <label class="flex items-center gap-1.5 text-sm cursor-pointer px-3 py-1.5 rounded-md border {{ 'border-pink-300 bg-pink-50' if val in act_values else 'border-gray-200 hover:border-gray-300' }}">
+              <input type="checkbox" class="rounded border-gray-300 text-pink-600 focus:ring-pink-500" data-group="action_field" value="{{ val }}" {{ 'checked' if val in act_values else '' }}>
+              {{ label }}
+            </label>
+            {% endfor %}
+          </div>
+          <input type="hidden" name="action_field" id="action_field_hidden" value="{{ rule.action if rule and rule.action else '' }}">
+          <p class="text-xs text-gray-400 mt-1.5">None selected = match any action (OR logic)</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Access Type</label>
+          <select name="access_type"
+                  class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+            <option value="" {{ 'selected' if not rule or not rule.access_type else '' }}>Any type</option>
+            <option value="temporary" {{ 'selected' if rule and rule.access_type == 'temporary' else '' }}>Temporary</option>
+            <option value="permanent" {{ 'selected' if rule and rule.access_type == 'permanent' else '' }}>Permanent</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 3: Approval Action -->
+    <div class="bg-white rounded-lg shadow p-5 space-y-4">
+      <h3 class="font-semibold text-gray-800 flex items-center gap-2">
+        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+        Approval Flow
+      </h3>
+      <p class="text-xs text-gray-500 -mt-2">Select which groups must approve. Leave both empty for auto-approve.</p>
+
+      <div class="grid grid-cols-2 gap-6">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">First Approval</label>
+          <select name="lead_group" id="first_approval"
+                  class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  onchange="updateApprovalHint()">
+            <option value="">— None (auto-approve) —</option>
+            <option value="__selected_team__" {{ 'selected' if rule and rule.lead_group == '__selected_team__' else '' }} class="font-semibold text-blue-700">🏷 Selected Team (dynamic)</option>
+            {% for g in groups %}
+            <option value="{{ g.group_name }}" {{ 'selected' if rule and rule.lead_group == g.group_name else '' }}>{{ g.group_name }}</option>
+            {% endfor %}
+          </select>
+          <p class="text-xs text-gray-400 mt-1">First approver group. "Selected Team" uses the team's lead group dynamically.</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Second Approval</label>
+          <select name="second_approval_group" id="second_approval"
+                  class="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                  onchange="updateApprovalHint()">
+            <option value="">— None (single level) —</option>
+            {% for g in groups %}
+            <option value="{{ g.group_name }}" {{ 'selected' if rule and rule.second_approval_group == g.group_name else '' }}>{{ g.group_name }}</option>
+            {% endfor %}
+          </select>
+          <p class="text-xs text-gray-400 mt-1">Second approver group (optional, for 2-level)</p>
+        </div>
+      </div>
+
+      <div id="approval_hint" class="text-sm font-medium px-3 py-2 rounded-md bg-green-50 text-green-700 border border-green-200">
+        ✅ Auto-approve — no human approval needed
+      </div>
+    </div>
+
+    <!-- Section 4: Validation Requirements -->
+    <div class="bg-white rounded-lg shadow p-5 space-y-4">
+      <h3 class="font-semibold text-gray-800 flex items-center gap-2">
+        <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+        Validation Requirements
+      </h3>
+
+      <div class="flex flex-col gap-3">
+        <label class="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" name="require_reason" value="true"
+                 class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                 {{ 'checked' if (rule and rule.require_reason) or not rule else '' }}>
+          <span class="text-gray-700">Require reason</span>
+          <span class="text-gray-400 text-xs">(reason field must be filled)</span>
+        </label>
+
+        <div class="flex items-start gap-4">
+          <label class="flex items-center gap-2 text-sm cursor-pointer mt-0.5">
+            <input type="checkbox" name="require_ticket" id="require_ticket_cb" value="true"
+                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                   {{ 'checked' if rule and rule.require_ticket else '' }}>
+            <span class="text-gray-700">Require ticket</span>
+          </label>
+          <div class="flex-1">
+            <div class="flex items-center gap-2">
+              <label class="text-sm text-gray-500 flex-shrink-0">Pattern:</label>
+              <input type="text" name="ticket_pattern" value="{{ rule.ticket_pattern if rule and rule.ticket_pattern else 'ARC-' }}"
+                     placeholder="ARC-"
+                     class="border border-gray-300 rounded-md px-3 py-1.5 text-sm w-32 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+              <span class="text-xs text-gray-400">Ticket must start with this prefix</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Submit -->
+    <div class="flex items-center gap-3">
+      <button type="submit"
+              class="bg-blue-600 text-white px-6 py-2.5 rounded-md text-sm font-medium hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors">
+        {{ 'Update Rule' if rule else 'Create Rule' }}
+      </button>
+      <a href="/admin/rules" class="text-gray-500 text-sm hover:underline px-3 py-2.5">Cancel</a>
+    </div>
+  </form>
+</div>
+
+<script>
+// Sync checkbox groups to hidden inputs (comma-separated values)
+document.querySelectorAll('[data-group]').forEach(cb => {
+  cb.addEventListener('change', () => {
+    const group = cb.dataset.group;
+    const checked = [...document.querySelectorAll(`[data-group="${group}"]:checked`)].map(el => el.value);
+    document.getElementById(group + '_hidden').value = checked.join(',');
+    const colors = {resource_type: 'purple', permission_level: 'amber', gcp_project: 'cyan', who_type: 'indigo', action_field: 'pink'};
+    const c = colors[group] || 'gray';
+    cb.closest('label').classList.toggle(`border-${c}-300`, cb.checked);
+    cb.closest('label').classList.toggle(`bg-${c}-50`, cb.checked);
+    cb.closest('label').classList.toggle('border-gray-200', !cb.checked);
+  });
+});
+
+// Approval flow hint
+function updateApprovalHint() {
+  var first = document.getElementById('first_approval').value;
+  var second = document.getElementById('second_approval').value;
+  var hint = document.getElementById('approval_hint');
+  var firstLabel = first === '__selected_team__' ? "Selected Team's Lead Group" : first;
+  if (!first && !second) {
+    hint.className = 'text-sm font-medium px-3 py-2 rounded-md bg-green-50 text-green-700 border border-green-200';
+    hint.innerHTML = '✅ Auto-approve — no human approval needed';
+  } else if (first === '__selected_team__' && !second) {
+    hint.className = 'text-sm font-medium px-3 py-2 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200';
+    hint.innerHTML = '🏷 Dynamic single approval — uses the <strong>team\'s lead group</strong> from Slack form';
+  } else if (first === '__selected_team__' && second) {
+    hint.className = 'text-sm font-medium px-3 py-2 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200';
+    hint.innerHTML = '🏷 Dynamic two-level — <strong>team\'s lead group</strong> first, then <strong>' + second + '</strong>';
+  } else if (first && !second) {
+    hint.className = 'text-sm font-medium px-3 py-2 rounded-md bg-blue-50 text-blue-700 border border-blue-200';
+    hint.innerHTML = '👤 Single approval — <strong>' + firstLabel + '</strong> must approve';
+  } else if (first && second) {
+    hint.className = 'text-sm font-medium px-3 py-2 rounded-md bg-amber-50 text-amber-700 border border-amber-200';
+    hint.innerHTML = '👥 Two-level approval — <strong>' + firstLabel + '</strong> first, then <strong>' + second + '</strong>';
+  } else {
+    // second set but first empty — invalid, warn
+    hint.className = 'text-sm font-medium px-3 py-2 rounded-md bg-red-50 text-red-700 border border-red-200';
+    hint.innerHTML = '⚠️ Invalid: First Approval must be set before Second Approval';
+  }
+}
+updateApprovalHint();
+</script>
+{% endblock %}

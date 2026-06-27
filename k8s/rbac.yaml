@@ -1,0 +1,79 @@
+# =============================================================================
+# RBAC: Approval Handler Service Account and Permissions
+# =============================================================================
+# The approval-handler needs to:
+#   1. Authenticate with Argo Server API (SA token via automountServiceAccountToken)
+#   2. Submit, resume, and stop workflows in argo-access-control namespace
+#   3. Read secrets for DB/Slack/admin credentials (already handled by env)
+#
+# The SA token is passed to the Argo Server API as a Bearer token.
+# Argo Server uses this to authorize workflow operations.
+# =============================================================================
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: approval-handler
+  namespace: argo-access-control
+  labels:
+    app: approval-handler
+    app.kubernetes.io/name: approval-handler
+    app.kubernetes.io/component: service-account
+    app.kubernetes.io/part-of: argo-access-control
+
+---
+# Role: permissions needed for Argo workflow management
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: approval-handler-role
+  namespace: argo-access-control
+  labels:
+    app: approval-handler
+    app.kubernetes.io/name: approval-handler
+    app.kubernetes.io/part-of: argo-access-control
+rules:
+  # Manage workflows (submit, resume, stop)
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflows"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  # Read workflow templates (for submission)
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtemplates"]
+    verbs: ["get", "list"]
+
+  # Required for Argo Workflows 3.4+ task results
+  - apiGroups: ["argoproj.io"]
+    resources: ["workflowtaskresults"]
+    verbs: ["create", "patch"]
+
+  # Pod access for workflow monitoring
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+
+  # Events for workflow tracking
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: approval-handler-binding
+  namespace: argo-access-control
+  labels:
+    app: approval-handler
+    app.kubernetes.io/name: approval-handler
+    app.kubernetes.io/part-of: argo-access-control
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: approval-handler-role
+subjects:
+  - kind: ServiceAccount
+    name: approval-handler
+    namespace: argo-access-control

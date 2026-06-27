@@ -1,0 +1,33 @@
+# =============================================================================
+# HealthCheckPolicy for approval-handler
+# =============================================================================
+# Tells GCP Gateway/LB to health-check on /health (HTTP 200) instead of the
+# default GET / which returns 404 and marks the backend as UNHEALTHY.
+#
+# Without this, the GCP load balancer returns 503 for ALL external traffic,
+# including Slack webhook requests to /approval-handler/slack/commands.
+# =============================================================================
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: approval-handler-healthcheck
+  namespace: argo-access-control
+  labels:
+    app.kubernetes.io/name: approval-handler
+    app.kubernetes.io/component: healthcheck
+    app.kubernetes.io/part-of: argo-access-control
+spec:
+  default:
+    checkIntervalSec: 15
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    config:
+      type: HTTP
+      httpHealthCheck:
+        port: 8080
+        requestPath: /health
+  targetRef:
+    group: ""
+    kind: Service
+    name: approval-handler

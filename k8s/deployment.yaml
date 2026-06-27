@@ -1,0 +1,168 @@
+# =============================================================================
+# Deployment: Approval Handler Service
+# =============================================================================
+# FastAPI service for approval workflow management:
+#   - Slack slash command (/access-request) and interactive buttons
+#   - Rule engine for approval policies
+#   - Admin UI for managing rules, groups, and request history
+#   - Argo Workflow API client for submitting/resuming/stopping workflows
+#
+# Image source: infra-devops/approval-handler/
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: approval-handler
+  namespace: argo-access-control
+  labels:
+    app: approval-handler
+    app.kubernetes.io/name: approval-handler
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: argo-access-control
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: approval-handler
+  template:
+    metadata:
+      labels:
+        app: approval-handler
+        app.kubernetes.io/name: approval-handler
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: argo-access-control
+    spec:
+      serviceAccountName: approval-handler
+      automountServiceAccountToken: true  # needed for Argo API auth
+
+      # Node scheduling - Karpenter stage nodepool
+      nodeSelector:
+        node: od-stage
+      tolerations:
+        - key: node
+          operator: Equal
+          value: od-stage
+          effect: NoSchedule
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: approval-handler
+          image: REGION-docker.pkg.dev/YOUR_PROJECT/REPO/approval-handler:latest
+          imagePullPolicy: Always
+
+          ports:
+            - name: http
+              containerPort: 8080
+
+          env:
+            # Database credentials (from ExternalSecret -> access-control-db-credentials)
+            # Cloud SQL instance at 10.0.0.100 (private IP, VPC-peered)
+            # Migrated from CNPG on 2026-05-28
+            - name: DB_HOST
+              value: "10.0.0.100"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_NAME
+              value: "access_control"
+            - name: DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: access-control-db-credentials
+                  key: username
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: access-control-db-credentials
+                  key: password
+
+            # Slack App credentials (from ExternalSecret -> approval-handler-slack-app)
+            - name: SLACK_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: approval-handler-slack-app
+                  key: bot-token
+            - name: SLACK_SIGNING_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: approval-handler-slack-app
+                  key: signing-secret
+            - name: SLACK_CHANNEL
+              value: "#access-request"
+
+            # Admin UI credentials (from ExternalSecret -> approval-handler-admin-auth)
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: approval-handler-admin-auth
+                  key: username
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: approval-handler-admin-auth
+                  key: password
+
+            # Force-approve password (from ExternalSecret -> approval-handler-admin-auth)
+            - name: FORCE_APPROVE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: approval-handler-admin-auth
+                  key: force-password
+
+            # Argo Workflows
+            - name: ARGO_NAMESPACE
+              value: "argo-access-control"
+            - name: ARGO_UI_URL
+              value: "https://workflow.example.com"
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}

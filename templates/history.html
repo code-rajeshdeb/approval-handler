@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}History - Arcana Access Control{% endblock %}
+{% block nav_history %}!text-white font-medium{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Request History</h1>
+  <div class="flex gap-2">
+    <a href="/admin/history"
+       class="px-3 py-1.5 rounded text-sm {{ 'bg-gray-900 text-white' if not filter_status else 'bg-white text-gray-700 border' }}">
+      All
+    </a>
+    <a href="/admin/history?status=pending"
+       class="px-3 py-1.5 rounded text-sm {{ 'bg-yellow-500 text-white' if filter_status == 'pending' else 'bg-white text-gray-700 border' }}">
+      Pending
+    </a>
+    <a href="/admin/history?status=approved"
+       class="px-3 py-1.5 rounded text-sm {{ 'bg-green-600 text-white' if filter_status == 'approved' else 'bg-white text-gray-700 border' }}">
+      Approved
+    </a>
+    <a href="/admin/history?status=rejected"
+       class="px-3 py-1.5 rounded text-sm {{ 'bg-red-600 text-white' if filter_status == 'rejected' else 'bg-white text-gray-700 border' }}">
+      Rejected
+    </a>
+    <a href="/admin/history?status=auto-approved"
+       class="px-3 py-1.5 rounded text-sm {{ 'bg-blue-600 text-white' if filter_status == 'auto-approved' else 'bg-white text-gray-700 border' }}">
+      Auto-approved
+    </a>
+    <a href="/admin/history?status=executed"
+       class="px-3 py-1.5 rounded text-sm {{ 'bg-emerald-600 text-white' if filter_status == 'executed' else 'bg-white text-gray-700 border' }}">
+      Executed
+    </a>
+    <a href="/admin/history?status=failed"
+       class="px-3 py-1.5 rounded text-sm {{ 'bg-red-700 text-white' if filter_status == 'failed' else 'bg-white text-gray-700 border' }}">
+      Failed
+    </a>
+  </div>
+</div>
+
+<div class="bg-white rounded-lg shadow overflow-x-auto">
+  <table class="w-full text-sm">
+    <thead class="bg-gray-50">
+      <tr>
+        <th class="px-3 py-3 text-left text-gray-600 w-6"></th>
+        <th class="px-3 py-3 text-left text-gray-600">Time</th>
+        <th class="px-3 py-3 text-left text-gray-600">Request ID</th>
+        <th class="px-3 py-3 text-left text-gray-600">Requester</th>
+        <th class="px-3 py-3 text-left text-gray-600">Action</th>
+        <th class="px-3 py-3 text-left text-gray-600">Target</th>
+        <th class="px-3 py-3 text-left text-gray-600">Resource</th>
+        <th class="px-3 py-3 text-left text-gray-600">Permission</th>
+        <th class="px-3 py-3 text-left text-gray-600">Project</th>
+        <th class="px-3 py-3 text-left text-gray-600">Duration</th>
+        <th class="px-3 py-3 text-left text-gray-600">Risk</th>
+        <th class="px-3 py-3 text-left text-gray-600">Status</th>
+        <th class="px-3 py-3 text-left text-gray-600">Approver</th>
+        <th class="px-3 py-3 text-left text-gray-600 w-16">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y">
+      {% for req in requests %}
+      <tr class="hover:bg-gray-50 cursor-pointer group"
+          onclick="toggleDetail(this, '{{ req.request_id }}', 'hist-detail-{{ loop.index }}')">
+        <td class="px-3 py-3 text-gray-400 group-hover:text-gray-600">
+          <svg class="w-4 h-4 chevron-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+          </svg>
+        </td>
+        <td class="px-3 py-3 text-gray-500 whitespace-nowrap text-xs">{{ req.created_at.strftime('%m-%d %H:%M') if req.created_at else '' }}</td>
+        <td class="px-3 py-3 font-mono text-xs text-gray-500">{{ req.request_id[:16] }}</td>
+        <td class="px-3 py-3">{{ req.requester_email.split('@')[0] if req.requester_email else '' }}</td>
+        <td class="px-3 py-3">{{ req.action }}</td>
+        <td class="px-3 py-3">{{ req.who_email.split('@')[0] if req.who_email else '' }}</td>
+        <td class="px-3 py-3">{{ req.resource_type }}</td>
+        <td class="px-3 py-3">{{ req.permission_level }}</td>
+        <td class="px-3 py-3 text-xs">{{ req.gcp_project }}</td>
+        <td class="px-3 py-3 text-xs">
+          {% if req.access_type == 'temporary' %}{{ req.expiry_hours }}h{% else %}Perm{% endif %}
+        </td>
+        <td class="px-3 py-3">
+          {% if req.risk_level == 'high' %}
+            <span class="text-red-600 text-xs font-medium">High</span>
+          {% elif req.risk_level == 'medium' %}
+            <span class="text-yellow-600 text-xs">Med</span>
+          {% else %}
+            <span class="text-green-600 text-xs">Low</span>
+          {% endif %}
+        </td>
+        <td class="px-3 py-3">
+          {% if req.status == 'executed' %}
+            <span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-xs">✅ executed</span>
+          {% elif req.status == 'failed' %}
+            <span class="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs" title="{{ req.error_message or '' }}">❌ failed</span>
+          {% elif req.status == 'approved' or req.status == 'auto-approved' %}
+            <span class="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs">{{ req.status }}</span>
+          {% elif req.status == 'pending' %}
+            <span class="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded text-xs">pending</span>
+          {% elif req.status == 'rejected' %}
+            <span class="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs">rejected</span>
+          {% else %}
+            <span class="bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-xs">{{ req.status }}</span>
+          {% endif %}
+        </td>
+        <td class="px-3 py-3 text-xs">{{ req.final_approved_by or req.lead_approved_by or '-' }}</td>
+        <td class="px-3 py-3" onclick="event.stopPropagation()">
+          {% if req.status in ('approved', 'auto-approved', 'executed', 'failed') and req.workflow_name %}
+          <button onclick="openForceModal('/admin/requests/{{ req.request_id }}/rerun', 'Enter force password to re-submit this workflow.')"
+                  class="text-blue-600 hover:text-blue-800 text-base" title="Rerun Workflow">🔄</button>
+          {% endif %}
+          {% if req.status in ('pending', 'rejected') %}
+          <button onclick="openForceModal('/admin/requests/{{ req.request_id }}/force-approve', 'This will SKIP all approval rules and immediately submit the workflow.')"
+                  class="text-amber-600 hover:text-red-600 text-base" title="Force Approve">⚡</button>
+          {% endif %}
+        </td>
+      </tr>
+      <!-- Expandable detail row (hidden by default, loaded via HTMX) -->
+      <tr id="hist-detail-{{ loop.index }}" style="display:none;" class="bg-gray-50"></tr>
+      {% else %}
+      <tr><td colspan="14" class="px-4 py-8 text-center text-gray-400">No requests found</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

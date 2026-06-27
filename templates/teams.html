@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block nav_teams %}font-bold text-white{% endblock %}
+{% block title %}Teams - Access Control{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-2xl font-bold text-gray-800">Teams</h1>
+    <p class="text-sm text-gray-500 mt-1">Map teams to their lead approval groups for routing</p>
+  </div>
+</div>
+
+<!-- Add Team -->
+<div class="bg-white rounded-lg shadow p-5 mb-6">
+  <h3 class="font-semibold text-gray-700 mb-3">Add Team</h3>
+  <form method="POST" action="/admin/teams/add" class="flex items-end gap-3">
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Team Name</label>
+      <input type="text" name="team_name" required placeholder="e.g., Backend"
+             class="border border-gray-300 rounded-md px-3 py-2 text-sm w-48 focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+    <div>
+      <label class="block text-xs font-medium text-gray-500 mb-1">Lead Approval Group</label>
+      <select name="lead_group" class="border border-gray-300 rounded-md px-3 py-2 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="">— None (use default approvers) —</option>
+        {% for g in groups %}
+        <option value="{{ g.group_name }}">{{ g.group_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="flex-1">
+      <label class="block text-xs font-medium text-gray-500 mb-1">Description</label>
+      <input type="text" name="description" placeholder="Optional description"
+             class="border border-gray-300 rounded-md px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+    <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-md text-sm hover:bg-blue-700 flex-shrink-0">
+      Add Team
+    </button>
+  </form>
+</div>
+
+<!-- Teams List -->
+{% for team in teams %}
+<div class="bg-white rounded-lg shadow-sm border mb-3" x-data="{ editing: false }">
+  <!-- View Mode -->
+  <div class="px-5 py-4 flex items-center justify-between" x-show="!editing">
+    <div class="flex items-center gap-4">
+      <span class="flex-shrink-0 w-10 h-10 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-sm">
+        {{ team.team_name[:2].upper() }}
+      </span>
+      <div>
+        <h3 class="font-semibold text-gray-800">{{ team.team_name }}</h3>
+        <p class="text-xs text-gray-500">
+          {% if team.lead_group %}
+            Lead Group: <span class="text-indigo-600 font-medium">{{ team.lead_group }}</span>
+          {% else %}
+            <span class="text-gray-400">No lead group — routes to default approvers</span>
+          {% endif %}
+          {% if team.description %}
+            · {{ team.description }}
+          {% endif %}
+        </p>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <button @click="editing = true"
+              class="text-blue-600 hover:text-blue-800 text-sm px-3 py-1.5 border border-blue-200 rounded-md hover:bg-blue-50">
+        Edit
+      </button>
+      <form method="POST" action="/admin/teams/{{ team.id }}/delete"
+            onsubmit="return confirm('Delete team {{ team.team_name }}?')">
+        <button type="submit" class="text-red-500 hover:text-red-700 text-sm px-3 py-1.5 border border-red-200 rounded-md hover:bg-red-50">
+          Delete
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Edit Mode -->
+  <div class="px-5 py-4 border-t-2 border-blue-200 bg-blue-50/30" x-show="editing" x-cloak>
+    <form method="POST" action="/admin/teams/{{ team.id }}/edit" class="flex items-end gap-3">
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Team Name</label>
+        <input type="text" name="team_name" value="{{ team.team_name }}" required
+               class="border border-gray-300 rounded-md px-3 py-2 text-sm w-48 focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-500 mb-1">Lead Approval Group</label>
+        <select name="lead_group" class="border border-gray-300 rounded-md px-3 py-2 text-sm w-56 focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <option value="">— None (use default approvers) —</option>
+          {% for g in groups %}
+          <option value="{{ g.group_name }}" {% if team.lead_group == g.group_name %}selected{% endif %}>{{ g.group_name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="flex-1">
+        <label class="block text-xs font-medium text-gray-500 mb-1">Description</label>
+        <input type="text" name="description" value="{{ team.description or '' }}"
+               class="border border-gray-300 rounded-md px-3 py-2 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+      </div>
+      <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-md text-sm hover:bg-blue-700 flex-shrink-0">
+        Save
+      </button>
+      <button type="button" @click="editing = false"
+              class="text-gray-500 hover:text-gray-700 px-3 py-2 rounded-md text-sm border border-gray-300 hover:bg-gray-50">
+        Cancel
+      </button>
+    </form>
+  </div>
+</div>
+{% else %}
+<div class="bg-white rounded-lg shadow p-8 text-center text-gray-400">
+  No teams configured yet. Add one above.
+</div>
+{% endfor %}
+{% endblock %}

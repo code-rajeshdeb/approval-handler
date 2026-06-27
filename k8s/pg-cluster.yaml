@@ -1,0 +1,158 @@
+# =============================================================================
+# CloudNativePG PostgreSQL Cluster for Argo Access Control
+# =============================================================================
+# This cluster stores the approval rules, approver groups, and access request
+# audit log for the Argo Access Control approval system.
+#
+# Prerequisites:
+#   1. CNPG operator installed (cluster-wide)
+#   2. Namespace 'argo-access-control' exists (namespace-rbac.yaml)
+#   3. ExternalSecret 'access-control-db-credentials' synced (external-secret-db.yaml)
+#   4. GCS bucket 'your-backups-bucket' accessible via Workload Identity
+#
+# CNPG Operator automatically creates these secrets:
+#   - access-control-db-superuser    (postgres superuser)
+#   - access-control-db-credentials  (application credentials - from bootstrap.initdb.secret)
+#
+# Service endpoints created by CNPG:
+#   - access-control-db-rw.argo-access-control.svc.cluster.local  (primary, read-write)
+#   - access-control-db-ro.argo-access-control.svc.cluster.local  (replicas, read-only)
+#   - access-control-db-r.argo-access-control.svc.cluster.local   (any instance)
+#
+# After the cluster is ready, run the schema init job:
+#   kubectl apply -f db-init-job.yaml
+# =============================================================================
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: access-control-db
+  namespace: argo-access-control
+  labels:
+    app: access-control
+    component: database
+    app.kubernetes.io/part-of: argo-access-control
+spec:
+  # PostgreSQL version
+  imageName: ghcr.io/cloudnative-pg/postgresql:18
+
+  # Number of instances (1 = single node, no HA)
+  # Can be increased to 3 for HA in production
+  instances: 1
+
+  # PostgreSQL configuration
+  postgresql:
+    parameters:
+      # Memory settings - adjusted for access control workload
+      shared_buffers: "128MB"
+      effective_cache_size: "256MB"
+      work_mem: "4MB"
+      maintenance_work_mem: "64MB"
+
+      # Connection settings
+      max_connections: "100"
+
+      # Logging
+      log_statement: "ddl"
+      log_min_duration_statement: "1000"
+
+      # Performance tuning for SSD
+      random_page_cost: "1.1"
+      effective_io_concurrency: "200"
+
+  # Bootstrap configuration - create database and user
+  # CNPG will use the pre-existing secret created by ExternalSecret
+  bootstrap:
+    initdb:
+      database: access_control
+      owner: access_control
+      secret:
+        name: access-control-db-credentials
+
+  # Storage configuration
+  storage:
+    size: 100Gi
+    storageClass: premium-rwo
+
+  # Resource configuration
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+
+  # Backup configuration - GCS via Workload Identity (gkeEnvironment)
+  backup:
+    barmanObjectStore:
+      destinationPath: "gs://your-backups-bucket/access-control-db"
+      googleCredentials:
+        gkeEnvironment: true
+    retentionPolicy: "3d"
+
+  # Node affinity — exclude C4d machine family.
+  # C4d nodes only support Hyperdisk Balanced, NOT pd-ssd (premium-rwo).
+  # Without this, the scheduler may place the pod on a c4d node, causing
+  # "pd-ssd disk type cannot be used by c4d-standard-8" volume attach failures.
+  # NOTE: Cannot migrate CNPG to Karpenter nodepools because CNPG CRD doesn't
+  # support tolerations field. Pod will remain on shared GKE nodepools.
+  affinity:
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+          - matchExpressions:
+              - key: node.kubernetes.io/instance-type
+                operator: NotIn
+                values:
+                  - c4d-standard-2
+                  - c4d-standard-4
+                  - c4d-standard-8
+                  - c4d-standard-16
+                  - c4d-standard-32
+                  - c4d-standard-48
+                  - c4d-standard-60
+                  - c4d-highmem-2
+                  - c4d-highmem-4
+                  - c4d-highmem-8
+                  - c4d-highmem-16
+                  - c4d-highmem-32
+                  - c4d-highmem-48
+                  - c4d-highmem-60
+                  - c4d-highcpu-2
+                  - c4d-highcpu-4
+                  - c4d-highcpu-8
+                  - c4d-highcpu-16
+                  - c4d-highcpu-32
+                  - c4d-highcpu-48
+                  - c4d-highcpu-60
+
+  # Monitoring
+  monitoring:
+    enablePodMonitor: false
+
+  # Primary update strategy
+  primaryUpdateStrategy: unsupervised
+
+  # Startup and liveness probes
+  startDelay: 30
+  stopDelay: 30
+
+---
+# =============================================================================
+# ScheduledBackup: Daily backup at 2 AM UTC
+# =============================================================================
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: access-control-db-daily
+  namespace: argo-access-control
+  labels:
+    app: access-control
+    component: database
+    app.kubernetes.io/part-of: argo-access-control
+spec:
+  schedule: "0 2 * * *"
+  backupOwnerReference: self
+  cluster:
+    name: access-control-db
+  immediate: false

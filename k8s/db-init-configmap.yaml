@@ -1,0 +1,521 @@
+# =============================================================================
+# ConfigMap: Database Schema and Seed Data for Access Control DB
+# =============================================================================
+# Contains the full SQL schema (6 tables + indexes) and seed data for the
+# Argo Access Control approval system.
+#
+# This ConfigMap is consumed by db-init-job.yaml which runs psql against
+# the CNPG cluster to initialize the database.
+#
+# All statements use IF NOT EXISTS / ON CONFLICT DO NOTHING patterns
+# so the job is fully idempotent and safe to re-run.
+#
+# Tables:
+#   1. approval_rules        - Rule engine for matching requests to approval policies
+#   2. approver_groups        - Named groups of approvers
+#   3. approver_group_members - Members within each approver group
+#   4. access_requests        - Full lifecycle audit log of all access requests
+#   5. teams                  - Team definitions with lead group mapping (v1.8.0)
+#   6. slack_users            - Cached Slack user directory for dropdowns (v1.8.0)
+#
+# Schema reference: plans/argo-approval-workflow-plan.md §9
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-init-schema
+  namespace: argo-access-control
+  labels:
+    app: access-control
+    component: database
+    app.kubernetes.io/part-of: argo-access-control
+data:
+  init.sql: |
+    -- =======================================================================
+    -- Access Control Database Schema + Seed Data
+    -- =======================================================================
+    -- Idempotent: safe to run multiple times (IF NOT EXISTS / ON CONFLICT)
+    -- =======================================================================
+
+    BEGIN;
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- 1. APPROVAL RULES (Rule Engine)
+    -- ═══════════════════════════════════════════════════════════════
+    -- Rules are evaluated in priority order (lowest number first).
+    -- NULL match conditions act as wildcards (match any value).
+    -- First matching rule wins.
+    -- ═══════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS approval_rules (
+        id                  SERIAL PRIMARY KEY,
+        name                VARCHAR(128) NOT NULL UNIQUE,
+        priority            INTEGER NOT NULL DEFAULT 100,
+        enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+
+        -- Match conditions (NULL = match any)
+        requester_email     VARCHAR(256),
+        resource_type       VARCHAR(128),
+        permission_level    VARCHAR(64),
+        gcp_project         VARCHAR(128),
+        action              VARCHAR(16),
+        access_type         VARCHAR(16),
+
+        -- Approval action
+        approvers_required  INTEGER NOT NULL DEFAULT 1,
+        approval_levels     INTEGER NOT NULL DEFAULT 1,
+        lead_group          VARCHAR(32),          -- First approval group
+        second_approval_group VARCHAR(32),        -- Second approval group (2-level)
+
+        -- Validation
+        require_reason      BOOLEAN NOT NULL DEFAULT TRUE,
+        require_ticket      BOOLEAN NOT NULL DEFAULT FALSE,
+        ticket_pattern      VARCHAR(128) DEFAULT 'ARC-',
+
+        -- Metadata
+        description         TEXT,
+        created_by          VARCHAR(128),
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_rules_priority ON approval_rules(priority);
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- 2. APPROVER GROUPS
+    -- ═══════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS approver_groups (
+        id          SERIAL PRIMARY KEY,
+        group_name  VARCHAR(64) NOT NULL UNIQUE,
+        description VARCHAR(256),
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS approver_group_members (
+        id              SERIAL PRIMARY KEY,
+        group_id        INTEGER NOT NULL REFERENCES approver_groups(id) ON DELETE CASCADE,
+        email           VARCHAR(128) NOT NULL,
+        slack_user_id   VARCHAR(32),
+        display_name    VARCHAR(128),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(group_id, email)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_agm_group ON approver_group_members(group_id);
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- 3. ACCESS REQUESTS (Audit Log)
+    -- ═══════════════════════════════════════════════════════════════
+    -- Full lifecycle tracking: pending → approved/rejected → executed
+    -- Every access request is recorded here for audit purposes.
+    -- ═══════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS access_requests (
+        id                      SERIAL PRIMARY KEY,
+        request_id              VARCHAR(64) UNIQUE NOT NULL,
+        request_type            VARCHAR(32) NOT NULL,
+
+        -- Who requested
+        requester_email         VARCHAR(128) NOT NULL,
+
+        -- What was requested
+        action                  VARCHAR(16) NOT NULL,
+        who_type                VARCHAR(32),
+        who_email               VARCHAR(128),
+        resource_type           VARCHAR(64),
+        resource_name           VARCHAR(256),
+        permission_level        VARCHAR(32),
+        custom_role             VARCHAR(256),
+        gcp_project             VARCHAR(64),
+        access_type             VARCHAR(16),
+        expiry_hours            INTEGER,
+        reason                  TEXT,
+        ticket                  VARCHAR(256),
+
+        -- Rule that matched
+        matched_rule_id         INTEGER REFERENCES approval_rules(id),
+        matched_rule_name       VARCHAR(128),
+        risk_level              VARCHAR(16) NOT NULL DEFAULT 'medium',
+
+        -- Level 1 Approval (Team Lead)
+        lead_approval_required  BOOLEAN DEFAULT FALSE,
+        lead_approver_group     VARCHAR(32),
+        lead_approved_by        VARCHAR(128),
+        lead_approved_at        TIMESTAMPTZ,
+
+        -- Level 2 / Final Approval
+        final_approval_required BOOLEAN DEFAULT TRUE,
+        final_approved_by       VARCHAR(128),
+        final_approved_at       TIMESTAMPTZ,
+
+        -- Status
+        status                  VARCHAR(16) NOT NULL DEFAULT 'pending',
+        rejection_reason        TEXT,
+
+        -- Execution
+        executed_at             TIMESTAMPTZ,
+        iam_role                VARCHAR(128),
+        error_message           TEXT,
+        auto_revoke_at          TIMESTAMPTZ,
+
+        -- Slack
+        slack_channel           VARCHAR(64),
+        slack_ts                VARCHAR(64),
+
+        -- Google Sheet
+        sheet_row               INTEGER,
+
+        -- Timestamps
+        created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_req_status ON access_requests(status);
+    CREATE INDEX IF NOT EXISTS idx_req_requester ON access_requests(requester_email);
+    CREATE INDEX IF NOT EXISTS idx_req_date ON access_requests(created_at);
+    CREATE INDEX IF NOT EXISTS idx_req_project ON access_requests(gcp_project);
+
+    -- Add workflow_name column if it doesn't exist (idempotent via DO block)
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'access_requests' AND column_name = 'workflow_name'
+        ) THEN
+            ALTER TABLE access_requests ADD COLUMN workflow_name VARCHAR(256);
+        END IF;
+    END $$;
+
+    -- Add second_approval_group column if it doesn't exist (v1.6.0)
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'approval_rules' AND column_name = 'second_approval_group'
+        ) THEN
+            ALTER TABLE approval_rules ADD COLUMN second_approval_group VARCHAR(32);
+        END IF;
+    END $$;
+
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- 5. TEAMS (v1.8.0)
+    -- ═══════════════════════════════════════════════════════════════
+    -- Maps team names to their lead approval group.
+    -- Used by the Slack modal "Your Team" field for team-based routing.
+    -- ═══════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS teams (
+        id          SERIAL PRIMARY KEY,
+        team_name   VARCHAR(64) NOT NULL UNIQUE,
+        lead_group  VARCHAR(64) REFERENCES approver_groups(group_name),
+        description VARCHAR(256),
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- 6. SLACK USERS CACHE (v1.8.0)
+    -- ═══════════════════════════════════════════════════════════════
+    -- Periodically synced from Slack API (every 4 hours).
+    -- Used for searchable user dropdowns in admin UI.
+    -- ═══════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS slack_users (
+        id              SERIAL PRIMARY KEY,
+        slack_user_id   VARCHAR(32) NOT NULL UNIQUE,
+        email           VARCHAR(128) NOT NULL,
+        display_name    VARCHAR(128),
+        real_name       VARCHAR(128),
+        avatar_url      VARCHAR(512),
+        is_active       BOOLEAN NOT NULL DEFAULT TRUE,
+        synced_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_slack_users_email ON slack_users(email);
+
+    -- Add team column to access_requests (v1.8.0)
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'access_requests' AND column_name = 'team'
+        ) THEN
+            ALTER TABLE access_requests ADD COLUMN team VARCHAR(64);
+        END IF;
+    END $$;
+
+    -- Add who_type column to approval_rules (v1.8.2)
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'approval_rules' AND column_name = 'who_type'
+        ) THEN
+            ALTER TABLE approval_rules ADD COLUMN who_type VARCHAR(64);
+        END IF;
+    END $$;
+
+    -- Add vault columns to access_requests (v1.9.0)
+    DO $$
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'access_requests' AND column_name = 'vault_operation'
+        ) THEN
+            ALTER TABLE access_requests ADD COLUMN vault_operation VARCHAR(64);
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'access_requests' AND column_name = 'vault_path'
+        ) THEN
+            ALTER TABLE access_requests ADD COLUMN vault_path VARCHAR(512);
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'access_requests' AND column_name = 'vault_key'
+        ) THEN
+            ALTER TABLE access_requests ADD COLUMN vault_key VARCHAR(256);
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'access_requests' AND column_name = 'vault_value'
+        ) THEN
+            ALTER TABLE access_requests ADD COLUMN vault_value TEXT;
+        END IF;
+    END $$;
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- 7. SERVICE CATEGORIES (v2.1.0)
+    -- ═══════════════════════════════════════════════════════════════
+    -- Admin-managed service categories for the Slack IAM Role picker.
+    -- Each category groups related GCP IAM roles.
+    -- ═══════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS service_categories (
+        id                  SERIAL PRIMARY KEY,
+        category_key        VARCHAR(64) NOT NULL UNIQUE,
+        label               VARCHAR(128) NOT NULL,
+        resource_level      BOOLEAN NOT NULL DEFAULT FALSE,
+        resource_placeholder VARCHAR(256),
+        enabled             BOOLEAN NOT NULL DEFAULT TRUE,
+        sort_order          INTEGER NOT NULL DEFAULT 100,
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- 8. IAM ROLES (v2.1.0)
+    -- ═══════════════════════════════════════════════════════════════
+    -- Individual IAM roles within each service category.
+    -- Admin can enable/disable roles; only enabled ones appear in Slack form.
+    -- ═══════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS iam_roles (
+        id              SERIAL PRIMARY KEY,
+        category_key    VARCHAR(64) NOT NULL REFERENCES service_categories(category_key) ON DELETE CASCADE,
+        display_name    VARCHAR(128) NOT NULL,
+        role_value      VARCHAR(256) NOT NULL,
+        description     TEXT,
+        enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+        sort_order      INTEGER NOT NULL DEFAULT 100,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE(category_key, role_value)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_iam_roles_category ON iam_roles(category_key);
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- SEED DATA: Default Approval Rules
+    -- ═══════════════════════════════════════════════════════════════
+    -- Rules evaluated in priority order (lowest first). First match wins.
+    --
+    --   10  devops-team-auto-approve   → Auto-approve for DevOps lead
+    --   20  stage-viewer-auto-approve  → Stage viewer auto-approved with alert
+    --   30  stage-editor-admin         → Stage editor/admin needs 1-level approval
+    --   40  prod-viewer               → Prod viewer needs approval + ticket
+    --   50  prod-editor-admin         → Prod editor/admin needs 2-level approval
+    --   60  revoke-auto-approve       → Revoke actions auto-approved
+    --  999  default-require-approval  → Catch-all: require single approval + ticket
+    -- ═══════════════════════════════════════════════════════════════
+    INSERT INTO approval_rules (name, priority, requester_email, resource_type, permission_level, gcp_project, action, access_type, approvers_required, approval_levels, lead_group, require_reason, require_ticket, ticket_pattern, description) VALUES
+    ('stage-viewer-auto-approve', 20, NULL, NULL, 'viewer', 'your-gcp-project-stage', 'grant', NULL, 0, 0, NULL, true, false, NULL, 'Stage viewer access auto-approved with alert'),
+    ('stage-editor-admin', 30, NULL, NULL, 'editor,admin,custom,none', 'your-gcp-project-stage', NULL, NULL, 1, 1, NULL, true, false, NULL, 'Stage editor/admin/custom needs single-level approval'),
+    ('prod-viewer', 40, NULL, NULL, 'viewer', 'your-gcp-project-prod,your-gcp-project-data', NULL, NULL, 1, 1, NULL, true, true, 'ENG-', 'Prod viewer needs approval + ticket'),
+    ('prod-editor-admin', 50, NULL, NULL, 'editor,admin,custom,none', 'your-gcp-project-prod,your-gcp-project-data', NULL, NULL, 1, 2, 'engineering-leads', true, true, 'ENG-', 'Prod editor/admin/custom needs two-level approval + ticket'),
+    ('revoke-auto-approve', 60, NULL, NULL, NULL, NULL, 'revoke', NULL, 0, 0, NULL, true, false, NULL, 'Revoke actions auto-approved'),
+    ('default-require-approval', 999, NULL, NULL, NULL, NULL, NULL, NULL, 1, 1, NULL, true, true, 'ENG-', 'Default catch-all: require single approval + ticket')
+    ON CONFLICT (name) DO NOTHING;
+
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- SEED DATA: Default Approver Groups
+    -- ═══════════════════════════════════════════════════════════════
+    INSERT INTO approver_groups (group_name, description) VALUES
+    ('final-approvers', 'Final approval authority - DevOps and management'),
+    ('engineering-leads', 'Engineering team leads'),
+    ('devops-leads', 'DevOps team leads'),
+    ('data-leads', 'Data team leads')
+    ON CONFLICT (group_name) DO NOTHING;
+
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- SEED DATA: Default Approver Group Members
+    -- ═══════════════════════════════════════════════════════════════
+    INSERT INTO approver_group_members (group_id, email, display_name) VALUES
+    -- Example approvers - replace with your team:
+    -- ((SELECT id FROM approver_groups WHERE group_name='final-approvers'), 'admin@example.com', 'Admin User'),
+    -- ((SELECT id FROM approver_groups WHERE group_name='devops-leads'), 'devops-lead@example.com', 'DevOps Lead')
+    ON CONFLICT (group_id, email) DO NOTHING;
+
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- SEED DATA: Default Teams (v1.8.0)
+    -- ═══════════════════════════════════════════════════════════════
+    INSERT INTO teams (team_name, lead_group, description) VALUES
+    ('Backend', NULL, 'Backend Engineering team'),
+    ('Compute Platform', NULL, 'Compute Platform team'),
+    ('DA', NULL, 'Data Analytics team'),
+    ('Data Science', NULL, 'Data Science team'),
+    ('DE', NULL, 'Data Engineering team'),
+    ('DevOps', 'devops-leads', 'DevOps / Infrastructure team'),
+    ('FE', NULL, 'Frontend Engineering team'),
+    ('Financial Analyst', NULL, 'Financial Analyst team'),
+    ('iOS', NULL, 'iOS Engineering team'),
+    ('PDA', NULL, 'Product & Data Analytics team'),
+    ('QA', NULL, 'Quality Assurance team')
+    ON CONFLICT (team_name) DO NOTHING;
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- SEED DATA: Service Categories (v2.1.0)
+    -- ═══════════════════════════════════════════════════════════════
+    INSERT INTO service_categories (category_key, label, resource_level, resource_placeholder, enabled, sort_order) VALUES
+    ('basic',            'Basic',                 FALSE, NULL, TRUE, 10),
+    ('bigquery',         'BigQuery',              TRUE,  'Dataset name (e.g., my_dataset) — leave global for project-level', TRUE, 20),
+    ('gcs-bucket',       'Cloud Storage',         TRUE,  'Bucket name (e.g., my-data-bucket) — leave global for project-level', TRUE, 30),
+    ('compute-vm',       'Compute Engine',        TRUE,  'VM instance name (e.g., prod-api-server) — leave global for project-level', TRUE, 40),
+    ('gke-cluster',      'Kubernetes Engine',     FALSE, NULL, TRUE, 50),
+    ('cloud-sql',        'Cloud SQL',             TRUE,  'Instance name (e.g., prod-db) — leave global for project-level', TRUE, 60),
+    ('service-account',  'IAM / Service Accounts',TRUE,  'SA email (e.g., my-sa@project.iam.gserviceaccount.com) — leave global for project-level', TRUE, 70),
+    ('pubsub',           'Pub/Sub',               TRUE,  'Topic or subscription name (e.g., order-events) — leave global for project-level', TRUE, 80),
+    ('secret-manager',   'Secret Manager',        TRUE,  'Secret name (e.g., api-credentials) — leave global for project-level', TRUE, 90),
+    ('artifact-registry','Artifact Registry',     TRUE,  'Repository name (e.g., docker-images) — leave global for project-level', TRUE, 100),
+    ('cloud-logging',    'Cloud Logging',         FALSE, NULL, TRUE, 110),
+    ('cloud-monitoring', 'Cloud Monitoring',      FALSE, NULL, TRUE, 120),
+    ('cloud-composer',   'Cloud Composer',        FALSE, NULL, TRUE, 130),
+    ('custom',           'Custom IAM Role',       TRUE,  'Resource name (optional) — leave global for project-level', TRUE, 999)
+    ON CONFLICT (category_key) DO NOTHING;
+
+    -- ═══════════════════════════════════════════════════════════════
+    -- SEED DATA: IAM Roles (v2.1.0)
+    -- ═══════════════════════════════════════════════════════════════
+    -- Basic
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('basic', 'Browser',  'roles/browser', 'Read access to browse the hierarchy for a project, including the folder, organization, and IAM policy.', 10),
+    ('basic', 'Viewer',   'roles/viewer',  'Read-only access to all resources. Cannot make any changes.', 20),
+    ('basic', 'Editor',   'roles/editor',  'Read/write access to most resources. Cannot manage IAM policies or billing.', 30),
+    ('basic', 'Owner',    'roles/owner',   'Full access to all resources including IAM management and billing.', 40)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- BigQuery
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('bigquery', 'BigQuery Data Viewer',  'roles/bigquery.dataViewer',  'Read access to datasets, tables, and views. Can list and get table data.', 10),
+    ('bigquery', 'BigQuery Data Editor',  'roles/bigquery.dataEditor',  'Read/write access to datasets and tables. Can create, update, and delete tables.', 20),
+    ('bigquery', 'BigQuery Data Owner',   'roles/bigquery.dataOwner',   'Full access to datasets. Can manage access control, create/delete datasets.', 30),
+    ('bigquery', 'BigQuery Job User',     'roles/bigquery.jobUser',     'Can run BigQuery jobs (queries) within the project. No data access by default.', 40),
+    ('bigquery', 'BigQuery User',         'roles/bigquery.user',        'Can run queries, create datasets, enumerate tables. Basic user-level access.', 50),
+    ('bigquery', 'BigQuery Admin',        'roles/bigquery.admin',       'Full admin access to all BigQuery resources in the project.', 60)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- Cloud Storage
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('gcs-bucket', 'Storage Object Viewer',  'roles/storage.objectViewer',  'Read-only access to GCS objects and their metadata. Can list and download.', 10),
+    ('gcs-bucket', 'Storage Object Creator', 'roles/storage.objectCreator', 'Can upload (create) new objects. Cannot view, delete, or overwrite existing objects.', 20),
+    ('gcs-bucket', 'Storage Object Admin',   'roles/storage.objectAdmin',   'Full control over GCS objects: create, view, delete, and update metadata.', 30),
+    ('gcs-bucket', 'Storage Admin',          'roles/storage.admin',         'Full control over buckets and objects including IAM policy management.', 40),
+    ('gcs-bucket', 'Storage HMAC Key Admin', 'roles/storage.hmacKeyAdmin',  'Can create and manage HMAC keys for service accounts accessing GCS.', 50)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- Compute Engine
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('compute-vm', 'Compute Viewer',           'roles/compute.viewer',           'Read-only access to Compute Engine resources. Can list VMs, disks, networks.', 10),
+    ('compute-vm', 'Compute Instance Admin',   'roles/compute.instanceAdmin.v1', 'Full control of Compute Engine instances: create, delete, start, stop, SSH.', 20),
+    ('compute-vm', 'Compute Network Viewer',   'roles/compute.networkViewer',    'Read-only access to networking resources: VPCs, subnets, firewalls, routes.', 30),
+    ('compute-vm', 'Compute Network Admin',    'roles/compute.networkAdmin',     'Full control of networking resources: create/modify VPCs, firewalls, routes.', 40),
+    ('compute-vm', 'Compute OS Login',         'roles/compute.osLogin',          'Can log in to a Compute Engine VM using OS Login as a standard user.', 50),
+    ('compute-vm', 'Compute OS Admin Login',   'roles/compute.osAdminLogin',     'Can log in to a Compute Engine VM using OS Login with sudo/admin privileges.', 60),
+    ('compute-vm', 'Compute Admin',            'roles/compute.admin',            'Full admin access to all Compute Engine resources in the project.', 70)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- Kubernetes Engine
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('gke-cluster', 'GKE Cluster Viewer',  'roles/container.clusterViewer', 'Can view GKE clusters. No access to workloads or Kubernetes API.', 10),
+    ('gke-cluster', 'GKE Viewer',          'roles/container.viewer',        'Read-only access to GKE resources including workloads, services, pods.', 20),
+    ('gke-cluster', 'GKE Developer',       'roles/container.developer',     'Can deploy workloads to GKE. Read/write access to pods, services, deployments.', 30),
+    ('gke-cluster', 'GKE Cluster Admin',   'roles/container.clusterAdmin',  'Full admin access to GKE cluster management. Can create/delete clusters.', 40),
+    ('gke-cluster', 'GKE Admin',           'roles/container.admin',         'Full admin access to all GKE resources including clusters, nodes, and workloads.', 50)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- Cloud SQL
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('cloud-sql', 'Cloud SQL Viewer',        'roles/cloudsql.viewer',       'Read-only access to Cloud SQL instances. Can view instance configuration.', 10),
+    ('cloud-sql', 'Cloud SQL Client',        'roles/cloudsql.client',       'Can connect to Cloud SQL instances using the Cloud SQL Proxy or direct IP.', 20),
+    ('cloud-sql', 'Cloud SQL Instance User',  'roles/cloudsql.instanceUser', 'Can connect to Cloud SQL instances. Used for Cloud SQL Auth Proxy access.', 30),
+    ('cloud-sql', 'Cloud SQL Editor',        'roles/cloudsql.editor',       'Read/write access to Cloud SQL instances. Can modify instance settings.', 40),
+    ('cloud-sql', 'Cloud SQL Admin',         'roles/cloudsql.admin',        'Full admin access to Cloud SQL: create, delete, configure instances and databases.', 50)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- IAM / Service Accounts
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('service-account', 'Service Account Viewer',        'roles/iam.serviceAccountViewer',       'Can view service accounts and their metadata. Cannot use or manage keys.', 10),
+    ('service-account', 'Service Account User',          'roles/iam.serviceAccountUser',         'Can impersonate (act as) a service account. Used for workload identity.', 20),
+    ('service-account', 'Service Account Token Creator', 'roles/iam.serviceAccountTokenCreator', 'Can create OAuth2 tokens, sign blobs, and sign JWTs for a service account.', 30),
+    ('service-account', 'Service Account Key Admin',     'roles/iam.serviceAccountKeyAdmin',     'Can create and delete service account keys. Cannot use the service account.', 40),
+    ('service-account', 'Service Account Admin',         'roles/iam.serviceAccountAdmin',        'Full admin: create, delete, and manage service accounts and their keys.', 50),
+    ('service-account', 'Workload Identity User',        'roles/iam.workloadIdentityUser',       'Can impersonate a service account from a GKE workload via Workload Identity.', 60)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- Pub/Sub
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('pubsub', 'Pub/Sub Viewer',      'roles/pubsub.viewer',      'Read-only access to Pub/Sub topics and subscriptions. Can list and get metadata.', 10),
+    ('pubsub', 'Pub/Sub Publisher',   'roles/pubsub.publisher',   'Can publish messages to Pub/Sub topics. Cannot create topics or subscriptions.', 20),
+    ('pubsub', 'Pub/Sub Subscriber',  'roles/pubsub.subscriber',  'Can consume messages from Pub/Sub subscriptions. Cannot create or delete.', 30),
+    ('pubsub', 'Pub/Sub Editor',      'roles/pubsub.editor',      'Read/write access to topics and subscriptions. Can create, modify, publish.', 40),
+    ('pubsub', 'Pub/Sub Admin',       'roles/pubsub.admin',       'Full admin access to all Pub/Sub resources. Can manage IAM policies.', 50)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- Secret Manager
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('secret-manager', 'Secret Manager Viewer',         'roles/secretmanager.viewer',              'Can view secret metadata. Cannot access secret values.', 10),
+    ('secret-manager', 'Secret Manager Accessor',       'roles/secretmanager.secretAccessor',      'Can access (read) secret values. The most commonly needed role.', 20),
+    ('secret-manager', 'Secret Manager Version Adder',  'roles/secretmanager.secretVersionAdder',  'Can add new versions to existing secrets. Cannot read or delete.', 30),
+    ('secret-manager', 'Secret Manager Admin',          'roles/secretmanager.admin',               'Full admin access: create, delete, and manage secrets and their versions.', 40)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- Artifact Registry
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('artifact-registry', 'Artifact Registry Reader',     'roles/artifactregistry.reader',    'Can read (pull) artifacts from Artifact Registry repositories.', 10),
+    ('artifact-registry', 'Artifact Registry Writer',     'roles/artifactregistry.writer',    'Can read and write (push) artifacts to Artifact Registry repositories.', 20),
+    ('artifact-registry', 'Artifact Registry Repo Admin', 'roles/artifactregistry.repoAdmin', 'Full control of a repository: read, write, delete artifacts and manage tags.', 30),
+    ('artifact-registry', 'Artifact Registry Admin',      'roles/artifactregistry.admin',     'Full admin: create/delete repositories, manage IAM, read/write all artifacts.', 40)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- Cloud Logging
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('cloud-logging', 'Logs Viewer',            'roles/logging.viewer',       'Can view logs and log-based metrics. Standard read access for troubleshooting.', 10),
+    ('cloud-logging', 'Logs Writer',            'roles/logging.logWriter',    'Can write log entries. Used by applications and services to send logs.', 20),
+    ('cloud-logging', 'Logging Config Writer',  'roles/logging.configWriter', 'Can create and manage log sinks, exclusions, and log-based metrics.', 30),
+    ('cloud-logging', 'Logging Admin',          'roles/logging.admin',        'Full admin access to Cloud Logging: view, write, configure, and manage IAM.', 40)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- Cloud Monitoring
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('cloud-monitoring', 'Monitoring Viewer',        'roles/monitoring.viewer',       'Read-only access to monitoring data, dashboards, and alerting policies.', 10),
+    ('cloud-monitoring', 'Monitoring Metric Writer',  'roles/monitoring.metricWriter', 'Can write custom metrics. Used by applications to publish metrics data.', 20),
+    ('cloud-monitoring', 'Monitoring Editor',        'roles/monitoring.editor',       'Can edit monitoring dashboards, alerting policies, and uptime checks.', 30),
+    ('cloud-monitoring', 'Monitoring Admin',         'roles/monitoring.admin',        'Full admin access to Cloud Monitoring: dashboards, alerts, metrics, IAM.', 40)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    -- Cloud Composer
+    INSERT INTO iam_roles (category_key, display_name, role_value, description, sort_order) VALUES
+    ('cloud-composer', 'Composer User',   'roles/composer.user',   'Can manage Airflow DAGs and view environments. Standard user access.', 10),
+    ('cloud-composer', 'Composer Worker', 'roles/composer.worker', 'Can execute DAG tasks. Used by Composer worker nodes.', 20),
+    ('cloud-composer', 'Composer Admin',  'roles/composer.admin',  'Full admin: create, update, delete Composer environments and manage DAGs.', 30)
+    ON CONFLICT (category_key, role_value) DO NOTHING;
+
+    COMMIT;

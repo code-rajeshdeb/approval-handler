@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Groups - Arcana Access Control{% endblock %}
+{% block nav_groups %}!text-white font-medium{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Approver Groups</h1>
+</div>
+
+<!-- Add Group Form -->
+<div class="bg-white rounded-lg shadow p-5 mb-6">
+  <h3 class="font-medium mb-3">Add New Group</h3>
+  <form method="POST" action="/admin/groups/add" class="flex items-end gap-3">
+    <div>
+      <label class="block text-xs text-gray-600 mb-1">Group Name</label>
+      <input type="text" name="group_name" required placeholder="my-team-leads"
+             class="border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+    <div class="flex-1">
+      <label class="block text-xs text-gray-600 mb-1">Description</label>
+      <input type="text" name="description" placeholder="Optional description"
+             class="w-full border rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+    </div>
+    <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded text-sm font-medium hover:bg-blue-700">
+      Add Group
+    </button>
+  </form>
+</div>
+
+<!-- Groups List -->
+{% for group in groups %}
+<div class="bg-white rounded-lg shadow mb-4">
+  <div class="px-5 py-4 border-b flex items-center justify-between">
+    <div>
+      <h3 class="font-semibold">{{ group.group_name }}</h3>
+      {% if group.description %}
+      <p class="text-sm text-gray-500">{{ group.description }}</p>
+      {% endif %}
+    </div>
+    <form method="POST" action="/admin/groups/{{ group.id }}/delete"
+          class="inline" onsubmit="return confirm('Delete group {{ group.group_name }} and all its members?')">
+      <button type="submit" class="text-red-500 hover:text-red-700 text-xs border border-red-300 px-2 py-1 rounded">
+        Delete Group
+      </button>
+    </form>
+  </div>
+
+  <!-- Members Table -->
+  <div class="px-5 py-3">
+    <table class="w-full text-sm">
+      <thead>
+        <tr>
+          <th class="text-left text-gray-500 py-2">Email</th>
+          <th class="text-left text-gray-500 py-2">Display Name</th>
+          <th class="text-left text-gray-500 py-2">Slack ID</th>
+          <th class="text-left text-gray-500 py-2"></th>
+        </tr>
+      </thead>
+      <tbody class="divide-y">
+        {% set members = group.members if group.members is not string else [] %}
+        {% for member in members %}
+        {% if member.email %}
+        <tr>
+          <td class="py-2">{{ member.email }}</td>
+          <td class="py-2 text-gray-500">{{ member.display_name or '-' }}</td>
+          <td class="py-2">
+            {% if member.slack_user_id %}
+              <span class="text-green-600 text-xs">{{ member.slack_user_id }}</span>
+            {% else %}
+              <span class="text-gray-400 text-xs">Not resolved</span>
+            {% endif %}
+          </td>
+          <td class="py-2 text-right">
+            <form method="POST" action="/admin/groups/{{ group.id }}/members/{{ member.id }}/delete"
+                  class="inline" onsubmit="return confirm('Remove {{ member.email }}?')">
+              <button type="submit" class="text-red-500 hover:underline text-xs">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endif %}
+        {% else %}
+        <tr><td colspan="4" class="py-3 text-gray-400 text-center">No members</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Add Member Form (with Slack user search) -->
+  <div class="px-5 py-3 border-t bg-gray-50">
+    <form method="POST" action="/admin/groups/{{ group.id }}/members/add" class="flex items-end gap-3">
+      <div class="relative flex-1" x-data="slackUserSearch()" x-init="init()">
+        <label class="block text-xs text-gray-600 mb-1">Search Slack User</label>
+        <input type="text" x-model="query" @input.debounce.300ms="search()" @focus="open = true" @click.away="open = false"
+               placeholder="Type name or email..."
+               autocomplete="off"
+               class="border rounded px-3 py-1.5 text-sm w-full focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <input type="hidden" name="email" :value="selectedEmail" required>
+        <input type="hidden" name="display_name" :value="selectedName">
+        <!-- Dropdown results -->
+        <div x-show="open && results.length > 0" x-cloak
+             class="absolute z-10 mt-1 w-full bg-white border rounded-lg shadow-lg max-h-48 overflow-y-auto">
+          <template x-for="u in results" :key="u.slack_user_id">
+            <div @click="select(u)" class="px-3 py-2 hover:bg-blue-50 cursor-pointer flex items-center gap-2 text-sm">
+              <img :src="u.avatar_url" class="w-6 h-6 rounded-full" alt="">
+              <div>
+                <span x-text="u.display_name || u.real_name" class="font-medium text-gray-800"></span>
+                <span x-text="u.email" class="text-gray-400 text-xs ml-1"></span>
+              </div>
+            </div>
+          </template>
+        </div>
+        <p x-show="selectedEmail" class="text-xs text-green-600 mt-1">
+          Selected: <span x-text="selectedName"></span> (<span x-text="selectedEmail"></span>)
+        </p>
+      </div>
+      <button type="submit" class="bg-gray-800 text-white px-3 py-1.5 rounded text-sm hover:bg-gray-700 flex-shrink-0">
+        Add Member
+      </button>
+    </form>
+  </div>
+</div>
+{% else %}
+<div class="bg-white rounded-lg shadow p-8 text-center text-gray-400">No groups configured</div>
+{% endfor %}
+
+<!-- Alpine.js for Slack user search -->
+<script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+<script>
+function slackUserSearch() {
+  return {
+    query: '',
+    results: [],
+    open: false,
+    selectedEmail: '',
+    selectedName: '',
+    init() {},
+    async search() {
+      if (this.query.length < 2) { this.results = []; return; }
+      try {
+        const resp = await fetch(`/api/slack-users?q=${encodeURIComponent(this.query)}`);
+        this.results = await resp.json();
+        this.open = true;
+      } catch(e) { this.results = []; }
+    },
+    select(u) {
+      this.selectedEmail = u.email;
+      this.selectedName = u.display_name || u.real_name;
+      this.query = `${this.selectedName} (${u.email})`;
+      this.open = false;
+    }
+  };
+}
+</script>
+{% endblock %}

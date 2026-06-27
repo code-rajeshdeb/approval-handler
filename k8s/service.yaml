@@ -1,0 +1,25 @@
+# =============================================================================
+# Service: Approval Handler
+# =============================================================================
+# ClusterIP service for the approval-handler FastAPI backend.
+# DNS/HTTPRoute is managed by the internal-tools Helm chart in example-company-stage-gitops.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: approval-handler
+  namespace: argo-access-control
+  labels:
+    app: approval-handler
+    app.kubernetes.io/name: approval-handler
+    app.kubernetes.io/component: service
+    app.kubernetes.io/part-of: argo-access-control
+spec:
+  type: ClusterIP
+  selector:
+    app: approval-handler
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

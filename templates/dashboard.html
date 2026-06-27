@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Arcana Access Control{% endblock %}
+{% block nav_dashboard %}!text-white font-medium{% endblock %}
+
+{% block content %}
+<h1 class="text-2xl font-bold mb-6">Dashboard</h1>
+
+<!-- Stats Cards -->
+<div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+  <div class="bg-white rounded-lg shadow p-5">
+    <div class="text-sm text-gray-500">Pending Requests</div>
+    <div class="text-3xl font-bold text-yellow-600">{{ stats.pending_requests }}</div>
+  </div>
+  <div class="bg-white rounded-lg shadow p-5">
+    <div class="text-sm text-gray-500">Total Requests</div>
+    <div class="text-3xl font-bold text-blue-600">{{ stats.total_requests }}</div>
+  </div>
+  <div class="bg-white rounded-lg shadow p-5">
+    <div class="text-sm text-gray-500">Approval Rules</div>
+    <div class="text-3xl font-bold text-green-600">{{ stats.total_rules }}</div>
+  </div>
+  <div class="bg-white rounded-lg shadow p-5">
+    <div class="text-sm text-gray-500">Approver Groups</div>
+    <div class="text-3xl font-bold text-purple-600">{{ stats.total_groups }}</div>
+  </div>
+</div>
+
+<!-- Recent Requests -->
+<div class="bg-white rounded-lg shadow">
+  <div class="px-5 py-4 border-b flex items-center justify-between">
+    <h2 class="font-semibold">Recent Requests</h2>
+    <a href="/admin/history" class="text-blue-600 text-sm hover:underline">View All</a>
+  </div>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm">
+      <thead class="bg-gray-50">
+        <tr>
+          <th class="px-4 py-3 text-left text-gray-600 w-6"></th>
+          <th class="px-4 py-3 text-left text-gray-600">Time</th>
+          <th class="px-4 py-3 text-left text-gray-600">Requester</th>
+          <th class="px-4 py-3 text-left text-gray-600">Target</th>
+          <th class="px-4 py-3 text-left text-gray-600">Resource</th>
+          <th class="px-4 py-3 text-left text-gray-600">Permission</th>
+          <th class="px-4 py-3 text-left text-gray-600">Project</th>
+          <th class="px-4 py-3 text-left text-gray-600">Status</th>
+          <th class="px-4 py-3 text-left text-gray-600">Approver</th>
+          <th class="px-4 py-3 text-left text-gray-600 w-20">Actions</th>
+        </tr>
+      </thead>
+      <tbody class="divide-y">
+        {% for req in recent %}
+        <tr class="hover:bg-gray-50 cursor-pointer group"
+            onclick="toggleDetail(this, '{{ req.request_id }}', 'detail-{{ loop.index }}')">
+          <td class="px-4 py-3 text-gray-400 group-hover:text-gray-600">
+            <svg class="w-4 h-4 chevron-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+          </td>
+          <td class="px-4 py-3 text-gray-500 whitespace-nowrap">{{ req.created_at.strftime('%Y-%m-%d %H:%M') if req.created_at else 'N/A' }}</td>
+          <td class="px-4 py-3">{{ req.requester_email }}</td>
+          <td class="px-4 py-3">{{ req.who_email }}</td>
+          <td class="px-4 py-3">{{ req.resource_type }}</td>
+          <td class="px-4 py-3">{{ req.permission_level }}</td>
+          <td class="px-4 py-3">{{ req.gcp_project }}</td>
+          <td class="px-4 py-3">
+            {% if req.status == 'executed' %}
+              <span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-xs font-medium">✅ executed</span>
+            {% elif req.status == 'failed' %}
+              <span class="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs font-medium" title="{{ req.error_message or '' }}">❌ failed</span>
+            {% elif req.status == 'approved' or req.status == 'auto-approved' %}
+              <span class="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs font-medium">{{ req.status }}</span>
+            {% elif req.status == 'pending' %}
+              <span class="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded text-xs font-medium">pending</span>
+            {% elif req.status == 'rejected' %}
+              <span class="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs font-medium">rejected</span>
+            {% else %}
+              <span class="bg-gray-100 text-gray-800 px-2 py-0.5 rounded text-xs font-medium">{{ req.status }}</span>
+            {% endif %}
+          </td>
+          <td class="px-4 py-3">{{ req.final_approved_by or req.lead_approved_by or '-' }}</td>
+          <td class="px-4 py-3" onclick="event.stopPropagation()">
+            {% if req.status in ('approved', 'auto-approved', 'executed', 'failed') and req.workflow_name %}
+            <button onclick="openForceModal('/admin/requests/{{ req.request_id }}/rerun', 'Enter force password to re-submit this workflow.')"
+                    class="text-blue-600 hover:text-blue-800 text-lg" title="Rerun Workflow">🔄</button>
+            {% endif %}
+            {% if req.status in ('pending', 'rejected') %}
+            <button onclick="openForceModal('/admin/requests/{{ req.request_id }}/force-approve', 'This will SKIP all approval rules and immediately submit the workflow.')"
+                    class="text-amber-600 hover:text-red-600 text-lg" title="Force Approve">⚡</button>
+            {% endif %}
+          </td>
+        </tr>
+        <!-- Expandable detail row (hidden by default, loaded via HTMX) -->
+        <tr id="detail-{{ loop.index }}" style="display:none;" class="bg-gray-50"></tr>
+        {% else %}
+        <tr><td colspan="10" class="px-4 py-8 text-center text-gray-400">No requests yet</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

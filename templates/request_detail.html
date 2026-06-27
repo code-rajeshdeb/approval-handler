@@ -1,0 +1,517 @@
+{% extends "base.html" %}
+{% block title %}Request {{ req.request_id }} - Arcana Access Control{% endblock %}
+{% block nav_history %}!text-white font-medium{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+  <a href="/admin/history" class="text-blue-600 hover:underline text-sm">&larr; Back to History</a>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+  <!-- Left: Request Details -->
+  <div class="lg:col-span-1 space-y-4">
+    <div class="bg-white rounded-lg shadow p-5">
+      <h2 class="text-lg font-bold mb-4">Request Details</h2>
+      <dl class="space-y-3 text-sm">
+        <div>
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Request ID</dt>
+          <dd class="font-mono text-gray-800">{{ req.request_id }}</dd>
+        </div>
+        <div>
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Status</dt>
+          <dd>
+            {% if req.status == 'executed' %}
+              <span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-xs font-medium">✅ executed</span>
+            {% elif req.status == 'failed' %}
+              <span class="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs font-medium">❌ failed</span>
+            {% elif req.status == 'approved' or req.status == 'auto-approved' %}
+              <span class="bg-green-100 text-green-800 px-2 py-0.5 rounded text-xs font-medium">{{ req.status }}</span>
+            {% elif req.status == 'pending' %}
+              <span class="bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded text-xs font-medium">pending</span>
+            {% elif req.status == 'rejected' %}
+              <span class="bg-red-100 text-red-800 px-2 py-0.5 rounded text-xs font-medium">rejected</span>
+            {% else %}
+              <span class="bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-xs font-medium">{{ req.status }}</span>
+            {% endif %}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Risk Level</dt>
+          <dd>
+            {% if req.risk_level == 'high' %}
+              <span class="text-red-600 font-medium">&#x1F534; High</span>
+            {% elif req.risk_level == 'medium' %}
+              <span class="text-yellow-600 font-medium">&#x1F7E1; Medium</span>
+            {% else %}
+              <span class="text-green-600 font-medium">&#x1F7E2; Low</span>
+            {% endif %}
+          </dd>
+        </div>
+        <div class="border-t pt-3">
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Requester</dt>
+          <dd class="text-gray-800">{{ req.requester_email }}</dd>
+        </div>
+        <div>
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Principal</dt>
+          <dd class="text-gray-800">{{ req.who_type }}: {{ req.who_email }}</dd>
+        </div>
+        <div>
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Resource</dt>
+          <dd class="text-gray-800">{{ req.resource_type }}: {{ req.resource_name or 'N/A' }}</dd>
+        </div>
+        <div>
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Permission</dt>
+          <dd class="text-gray-800">
+            {{ req.permission_level }}
+            {% if req.custom_role %}<span class="text-gray-500 text-xs">({{ req.custom_role }})</span>{% endif %}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">GCP Project</dt>
+          <dd class="text-gray-800">{{ req.gcp_project }}</dd>
+        </div>
+        <div>
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Duration</dt>
+          <dd class="text-gray-800">
+            {% if req.access_type == 'temporary' %}Temporary — {{ req.expiry_hours }} hours{% else %}Permanent{% endif %}
+          </dd>
+        </div>
+        <div>
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Reason</dt>
+          <dd class="text-gray-800">{{ req.reason or 'N/A' }}</dd>
+        </div>
+        {% if req.ticket %}
+        <div>
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Ticket</dt>
+          <dd class="text-gray-800">{{ req.ticket }}</dd>
+        </div>
+        {% endif %}
+        {% if req.workflow_name %}
+        <div class="border-t pt-3">
+          <dt class="text-gray-500 text-xs uppercase tracking-wide">Argo Workflow</dt>
+          <dd>
+            <a href="{{ argo_ui_url }}/workflows/{{ argo_namespace }}/{{ req.workflow_name }}"
+               target="_blank" class="text-blue-600 hover:underline text-xs font-mono">
+              {{ req.workflow_name }}
+            </a>
+          </dd>
+        </div>
+        {% endif %}
+      </dl>
+
+      {# ── Admin Actions ── #}
+      <div class="mt-4 pt-4 border-t space-y-2">
+        {% if req.status in ('approved', 'auto-approved', 'executed', 'failed') and req.workflow_name %}
+        <button onclick="openForceModal('/admin/requests/{{ req.request_id }}/rerun', 'Enter force password to re-submit this workflow.')"
+                class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-sm font-medium hover:bg-blue-100 transition-colors">
+          🔄 Rerun Workflow
+        </button>
+        {% endif %}
+        {% if req.status in ('pending', 'rejected') %}
+        <button onclick="openForceModal('/admin/requests/{{ req.request_id }}/force-approve', 'This will SKIP all approval rules and immediately submit the workflow.')"
+                class="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-sm font-medium hover:bg-amber-100 transition-colors">
+          ⚡ Force Approve
+        </button>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Audit Trail Timeline -->
+  <div class="lg:col-span-2">
+    <div class="bg-white rounded-lg shadow p-5">
+      <h2 class="text-lg font-bold mb-2">Audit Trail</h2>
+      <p class="text-xs text-gray-400 mb-4">Request lifecycle — left to right</p>
+
+      <!-- ═══════ Horizontal Pipeline ═══════ -->
+      <div class="overflow-x-auto">
+        <div class="pipeline-wrap">
+
+          {# ── Node 1: Request Submitted ── #}
+          <div class="pipeline-node">
+            <div class="node-circle bg-blue-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            </div>
+            <p class="node-label">Submitted</p>
+            <p class="node-time">{{ req.created_at.strftime('%H:%M') if req.created_at else '' }}</p>
+          </div>
+
+          <div class="pipeline-arrow done"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+          {# ── Node 2: Rule Engine ── #}
+          <div class="pipeline-node">
+            <div class="node-circle bg-purple-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+            </div>
+            <p class="node-label">Rules</p>
+            <p class="node-time">
+              {% if req.risk_level == 'high' %}🔴 High
+              {% elif req.risk_level == 'medium' %}🟡 Med
+              {% else %}🟢 Low{% endif %}
+            </p>
+          </div>
+
+          {% if req.status == 'auto-approved' %}
+          {# ═══ AUTO-APPROVED PATH ═══ #}
+
+          <div class="pipeline-arrow done"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+          {# ── Node 3: Auto-Approved ── #}
+          <div class="pipeline-node">
+            <div class="node-circle bg-green-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+            </div>
+            <p class="node-label text-green-700">Auto-<br>Approved</p>
+            <p class="node-time">{{ req.created_at.strftime('%H:%M') if req.created_at else '' }}</p>
+          </div>
+
+          {# ── Arrow → Workflow ── #}
+          {% if req.workflow_name %}
+          <div class="pipeline-arrow done"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% elif req.status in ('approved', 'auto-approved') %}
+          <div class="pipeline-arrow error"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% endif %}
+
+          {# ── Node: Workflow ── #}
+          {% if req.workflow_name %}
+          <div class="pipeline-node">
+            <div class="node-circle bg-indigo-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            </div>
+            <p class="node-label">Workflow</p>
+            <p class="node-time">✅ Done</p>
+          </div>
+          {% elif req.status in ('approved', 'auto-approved') %}
+          <div class="pipeline-node">
+            <div class="node-circle bg-red-400">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            </div>
+            <p class="node-label text-red-600">No WF</p>
+            <p class="node-time">⚠️</p>
+          </div>
+          {% endif %}
+
+          {% else %}
+          {# ═══ MANUAL APPROVAL PATH ═══ #}
+
+          <div class="pipeline-arrow done"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+          {% if req.lead_approval_required %}
+          {# ── 2-LEVEL APPROVAL ── #}
+
+          {# ── Node 3: Lead Approval Request ── #}
+          <div class="pipeline-node">
+            <div class="node-circle bg-amber-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+            </div>
+            <p class="node-label">L1 Slack<br>Request</p>
+            <p class="node-time">{{ req.created_at.strftime('%H:%M') if req.created_at else '' }}</p>
+          </div>
+
+          {# ── Arrow → Lead Decision ── #}
+          {% if req.lead_approved_by %}
+          <div class="pipeline-arrow done"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% elif req.status == 'rejected' %}
+          <div class="pipeline-arrow error"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% else %}
+          <div class="pipeline-arrow active"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% endif %}
+
+          {# ── Node 4: Lead Decision ── #}
+          {% if req.lead_approved_by %}
+          <div class="pipeline-node">
+            <div class="node-circle bg-green-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            </div>
+            <p class="node-label text-green-700">L1<br>Approved</p>
+            <p class="node-time">{{ req.lead_approved_at.strftime('%H:%M') if req.lead_approved_at else '' }}</p>
+          </div>
+
+          <div class="pipeline-arrow done"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+
+          {# ── Node 5: Final Approval Request ── #}
+          <div class="pipeline-node">
+            <div class="node-circle bg-amber-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+            </div>
+            <p class="node-label">L2 Slack<br>Request</p>
+            <p class="node-time">{{ req.lead_approved_at.strftime('%H:%M') if req.lead_approved_at else '' }}</p>
+          </div>
+          {% elif req.status == 'rejected' %}
+          {# Lead didn't approve - rejected at lead level #}
+          <div class="pipeline-node">
+            <div class="node-circle bg-red-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </div>
+            <p class="node-label text-red-700">Rejected</p>
+            <p class="node-time">{{ req.updated_at.strftime('%H:%M') if req.updated_at else '' }}</p>
+          </div>
+          {% else %}
+          {# Waiting for lead approval #}
+          <div class="pipeline-node">
+            <div class="node-circle bg-yellow-400 node-pulse">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <p class="node-label text-yellow-700">Awaiting<br>Lead</p>
+            <p class="node-time">⏳</p>
+          </div>
+          {% endif %}
+
+          {# ── Continue to Final Decision (only if lead approved) ── #}
+          {% if req.lead_approved_by %}
+
+          {# ── Arrow → Final Decision ── #}
+          {% if req.status == 'approved' %}
+          <div class="pipeline-arrow done"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% elif req.status == 'rejected' %}
+          <div class="pipeline-arrow error"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% else %}
+          <div class="pipeline-arrow active"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% endif %}
+
+          {# ── Node 6: Final Decision ── #}
+          {% if req.status == 'approved' %}
+          <div class="pipeline-node">
+            <div class="node-circle bg-green-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            </div>
+            <p class="node-label text-green-700">L2<br>Approved</p>
+            <p class="node-time">{{ req.final_approved_at.strftime('%H:%M') if req.final_approved_at else '' }}</p>
+          </div>
+          {% elif req.status == 'rejected' %}
+          <div class="pipeline-node">
+            <div class="node-circle bg-red-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </div>
+            <p class="node-label text-red-700">Rejected</p>
+            <p class="node-time">{{ req.updated_at.strftime('%H:%M') if req.updated_at else '' }}</p>
+          </div>
+          {% elif req.status == 'pending' %}
+          <div class="pipeline-node">
+            <div class="node-circle bg-yellow-400 node-pulse">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <p class="node-label text-yellow-700">Awaiting<br>Final</p>
+            <p class="node-time">⏳</p>
+          </div>
+          {% endif %}
+
+          {% endif %} {# end lead_approved_by check for 2-level #}
+
+          {% else %}
+          {# ── 1-LEVEL APPROVAL ── #}
+
+          {# ── Node 3: Approval Request ── #}
+          <div class="pipeline-node">
+            <div class="node-circle bg-amber-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+            </div>
+            <p class="node-label">Slack<br>Request</p>
+            <p class="node-time">{{ req.created_at.strftime('%H:%M') if req.created_at else '' }}</p>
+          </div>
+
+          {# ── Arrow → Decision ── #}
+          {% if req.status == 'approved' %}
+          <div class="pipeline-arrow done"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% elif req.status == 'rejected' %}
+          <div class="pipeline-arrow error"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% else %}
+          <div class="pipeline-arrow active"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          {% endif %}
+
+          {# ── Node 4: Decision ── #}
+          {% if req.status == 'approved' %}
+          <div class="pipeline-node">
+            <div class="node-circle bg-green-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            </div>
+            <p class="node-label text-green-700">Approved</p>
+            <p class="node-time">{{ req.final_approved_at.strftime('%H:%M') if req.final_approved_at else '' }}</p>
+          </div>
+          {% elif req.status == 'rejected' %}
+          <div class="pipeline-node">
+            <div class="node-circle bg-red-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </div>
+            <p class="node-label text-red-700">Rejected</p>
+            <p class="node-time">{{ req.updated_at.strftime('%H:%M') if req.updated_at else '' }}</p>
+          </div>
+          {% elif req.status == 'pending' %}
+          <div class="pipeline-node">
+            <div class="node-circle bg-yellow-400 node-pulse">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <p class="node-label text-yellow-700">Awaiting</p>
+            <p class="node-time">⏳</p>
+          </div>
+          {% endif %}
+
+          {% endif %} {# end 1-level vs 2-level #}
+
+          {# ── Workflow node (for manual approval paths) ── #}
+          {% if req.status in ('approved',) and req.workflow_name %}
+          <div class="pipeline-arrow done"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          <div class="pipeline-node">
+            <div class="node-circle bg-indigo-500">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            </div>
+            <p class="node-label">Workflow</p>
+            <p class="node-time">✅ Done</p>
+          </div>
+          {% elif req.status == 'approved' and not req.workflow_name %}
+          <div class="pipeline-arrow error"><div class="arrow-line"></div><div class="arrow-head"></div></div>
+          <div class="pipeline-node">
+            <div class="node-circle bg-red-400">
+              <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            </div>
+            <p class="node-label text-red-600">No WF</p>
+            <p class="node-time">⚠️</p>
+          </div>
+          {% endif %}
+
+          {% endif %} {# end auto-approved vs normal flow #}
+
+        </div>
+      </div>
+
+      <!-- ═══════ Detail Panel Below Pipeline ═══════ -->
+      <div class="mt-4 border-t pt-4 space-y-3">
+
+        {# ── Request Info ── #}
+        <div class="bg-blue-50 border border-blue-100 rounded-lg p-3 text-sm">
+          <p class="font-semibold text-blue-800 text-xs uppercase tracking-wide mb-1">📋 Request</p>
+          <p class="text-gray-700">
+            <span class="font-medium">{{ req.requester_email }}</span> requested
+            <span class="font-medium">{{ req.permission_level }}</span>{% if req.custom_role %} <span class="text-gray-500">({{ req.custom_role }})</span>{% endif %} access to
+            <span class="font-medium">{{ req.resource_type }}:{{ req.resource_name or 'project-level' }}</span>
+            for <span class="font-medium">{{ req.who_type }}:{{ req.who_email }}</span>
+            on <span class="font-medium">{{ req.gcp_project }}</span>
+          </p>
+        </div>
+
+        {# ── Rule Engine Details ── #}
+        <div class="bg-purple-50 border border-purple-100 rounded-lg p-3 text-sm">
+          <p class="font-semibold text-purple-800 text-xs uppercase tracking-wide mb-1">⚙️ Rule Engine</p>
+          <div class="text-gray-700 space-y-0.5">
+            <p>Matched: <span class="font-medium">{{ req.matched_rule_name or 'N/A' }}</span>
+              {% if rule %}<span class="text-gray-400 text-xs">(priority {{ rule.priority }})</span>{% endif %}
+            </p>
+            <p>Risk:
+              {% if req.risk_level == 'high' %}<span class="text-red-600 font-medium">HIGH</span>
+              {% elif req.risk_level == 'medium' %}<span class="text-yellow-600 font-medium">MEDIUM</span>
+              {% else %}<span class="text-green-600 font-medium">LOW</span>{% endif %}
+              — Decision:
+              {% if not req.final_approval_required %}<span class="text-green-600 font-medium">Auto-approve</span>
+              {% else %}<span class="text-amber-600 font-medium">Approval required</span>
+                {% if req.lead_approval_required %} (2-level){% else %} (1-level){% endif %}
+              {% endif %}
+            </p>
+            {% if rule and rule.require_ticket %}
+            <p>Ticket: <span class="font-mono">{{ req.ticket or 'not provided' }}</span></p>
+            {% endif %}
+          </div>
+        </div>
+
+        {# ── Approval Details ── #}
+        {% if req.final_approval_required %}
+        <div class="{% if req.status == 'approved' %}bg-green-50 border-green-100{% elif req.status == 'rejected' %}bg-red-50 border-red-100{% else %}bg-yellow-50 border-yellow-100{% endif %} border rounded-lg p-3 text-sm">
+          <p class="font-semibold {% if req.status == 'approved' %}text-green-800{% elif req.status == 'rejected' %}text-red-800{% else %}text-yellow-800{% endif %} text-xs uppercase tracking-wide mb-1">
+            {% if req.status == 'approved' %}✅ Approval{% elif req.status == 'rejected' %}❌ Rejected{% else %}⏳ Pending{% endif %}
+          </p>
+          <div class="text-gray-700 space-y-0.5">
+            {% if req.lead_approval_required %}
+            <p>Lead (L1):
+              {% if req.lead_approved_by %}
+                <span class="text-green-700 font-medium">✓ {{ req.lead_approved_by }}</span>
+                <span class="text-gray-400 text-xs font-mono">{{ req.lead_approved_at.strftime('%H:%M:%S UTC') if req.lead_approved_at else '' }}</span>
+              {% else %}
+                <span class="text-yellow-600">Pending — group: {{ req.lead_approver_group or 'leads' }}</span>
+              {% endif %}
+            </p>
+            {% endif %}
+            <p>{% if req.lead_approval_required %}Final (L2){% else %}Approver{% endif %}:
+              {% if req.status == 'approved' %}
+                <span class="text-green-700 font-medium">✓ {{ req.final_approved_by }}</span>
+                <span class="text-gray-400 text-xs font-mono">{{ req.final_approved_at.strftime('%H:%M:%S UTC') if req.final_approved_at else '' }}</span>
+              {% elif req.status == 'rejected' %}
+                <span class="text-red-700 font-medium">✗ Rejected</span>
+                <span class="text-gray-400 text-xs font-mono">{{ req.updated_at.strftime('%H:%M:%S UTC') if req.updated_at else '' }}</span>
+              {% else %}
+                <span class="text-yellow-600">Waiting for Slack response</span>
+              {% endif %}
+            </p>
+            {% if req.status == 'rejected' and req.rejection_reason %}
+            <p class="text-red-600 mt-1">Reason: {{ req.rejection_reason }}</p>
+            {% endif %}
+          </div>
+        </div>
+        {% endif %}
+
+        {# ── Workflow Details ── #}
+        {% if req.workflow_name %}
+        <div class="bg-indigo-50 border border-indigo-100 rounded-lg p-3 text-sm">
+          <p class="font-semibold text-indigo-800 text-xs uppercase tracking-wide mb-1">⚡ Argo Workflow</p>
+          <div class="text-gray-700 space-y-0.5">
+            <p>Template: <span class="font-mono font-medium">
+              {% if req.resource_type == 'gcp-iam' %}manage-iam-permissions{% elif req.resource_type == 'compute-vm' %}grant-compute-vm-access{% elif req.resource_type == 'gcs-bucket' %}grant-bucket-access{% else %}{{ req.resource_type }}{% endif %}
+            </span></p>
+            <p>Workflow: <a href="{{ argo_ui_url }}/workflows/{{ argo_namespace }}/{{ req.workflow_name }}"
+               target="_blank" class="text-blue-600 hover:underline font-mono">{{ req.workflow_name }} ↗</a></p>
+          </div>
+        </div>
+        {% elif req.status in ('approved', 'auto-approved') %}
+        <div class="bg-red-50 border border-red-100 rounded-lg p-3 text-sm">
+          <p class="font-semibold text-red-700 text-xs uppercase tracking-wide mb-1">⚠️ Workflow Issue</p>
+          <p class="text-gray-600">Approved but no workflow name captured. Check Argo UI directly.</p>
+        </div>
+        {% endif %}
+
+        {% if req.error_message %}
+        <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm">
+          <p class="font-semibold text-red-700 text-xs uppercase tracking-wide mb-1">❌ Workflow Error</p>
+          <p class="text-red-700 font-mono text-xs break-all">{{ req.error_message }}</p>
+        </div>
+        {% endif %}
+
+      </div>
+    </div>
+
+    <!-- Timeline Summary -->
+    <div class="bg-white rounded-lg shadow p-5 mt-4">
+      <h3 class="text-sm font-bold text-gray-700 mb-3 uppercase tracking-wide">Timestamps</h3>
+      <table class="w-full text-sm">
+        <tbody class="divide-y">
+          <tr>
+            <td class="py-2 text-gray-500 w-48">Created</td>
+            <td class="py-2 font-mono text-xs">{{ req.created_at.strftime('%Y-%m-%d %H:%M:%S UTC') if req.created_at else 'N/A' }}</td>
+          </tr>
+          {% if req.lead_approved_at %}
+          <tr>
+            <td class="py-2 text-gray-500">Lead Approved</td>
+            <td class="py-2 font-mono text-xs">{{ req.lead_approved_at.strftime('%Y-%m-%d %H:%M:%S UTC') }} <span class="text-gray-400">by {{ req.lead_approved_by }}</span></td>
+          </tr>
+          {% endif %}
+          {% if req.final_approved_at %}
+          <tr>
+            <td class="py-2 text-gray-500">Final Approved</td>
+            <td class="py-2 font-mono text-xs">{{ req.final_approved_at.strftime('%Y-%m-%d %H:%M:%S UTC') }} <span class="text-gray-400">by {{ req.final_approved_by }}</span></td>
+          </tr>
+          {% endif %}
+          <tr>
+            <td class="py-2 text-gray-500">Last Updated</td>
+            <td class="py-2 font-mono text-xs">{{ req.updated_at.strftime('%Y-%m-%d %H:%M:%S UTC') if req.updated_at else 'N/A' }}</td>
+          </tr>
+          {% if req.workflow_name %}
+          <tr>
+            <td class="py-2 text-gray-500">Workflow</td>
+            <td class="py-2 font-mono text-xs">{{ req.workflow_name }}</td>
+          </tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

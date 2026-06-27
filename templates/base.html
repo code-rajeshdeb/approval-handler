@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Arcana Access Control{% endblock %}</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.0"></script>
+  <style>
+    [data-loading] { opacity: 0.5; pointer-events: none; }
+    .chevron-icon { transition: transform 0.15s ease; }
+    .chevron-open { transform: rotate(90deg); }
+
+    /* Pipeline flow diagram */
+    .pipeline-wrap { display: flex; align-items: flex-start; min-width: max-content; padding: 16px 4px 8px; }
+    .pipeline-node { display: flex; flex-direction: column; align-items: center; width: 96px; flex-shrink: 0; position: relative; }
+    .pipeline-node .node-circle {
+      width: 40px; height: 40px; border-radius: 9999px; display: flex;
+      align-items: center; justify-content: center; box-shadow: 0 1px 3px rgba(0,0,0,.15);
+      transition: transform .15s ease;
+    }
+    .pipeline-node:hover .node-circle { transform: scale(1.12); }
+    .pipeline-node .node-label { font-size: 11px; font-weight: 600; margin-top: 8px; text-align: center; line-height: 1.3; color: #374151; }
+    .pipeline-node .node-time  { font-size: 10px; font-family: ui-monospace,monospace; color: #9ca3af; margin-top: 3px; text-align: center; }
+    .pipeline-arrow {
+      display: flex; align-items: center; flex: 1 1 0; min-width: 32px;
+      margin-top: 20px;          /* vertically center on 40px circle */
+      padding: 0 2px;
+    }
+    .pipeline-arrow .arrow-line { flex: 1; height: 2px; }
+    .pipeline-arrow .arrow-head {
+      width: 0; height: 0;
+      border-top: 5px solid transparent; border-bottom: 5px solid transparent;
+      border-left-width: 7px; border-left-style: solid;
+    }
+    /* arrow color variants */
+    .pipeline-arrow.done .arrow-line  { background: #22c55e; }
+    .pipeline-arrow.done .arrow-head  { border-left-color: #22c55e; }
+    .pipeline-arrow.active .arrow-line { background: #3b82f6; }
+    .pipeline-arrow.active .arrow-head { border-left-color: #3b82f6; }
+    .pipeline-arrow.waiting .arrow-line { background: #d1d5db; border-top: 1px dashed #9ca3af; height: 0; }
+    .pipeline-arrow.waiting .arrow-head { border-left-color: #d1d5db; }
+    .pipeline-arrow.error .arrow-line  { background: #ef4444; }
+    .pipeline-arrow.error .arrow-head  { border-left-color: #ef4444; }
+
+    @keyframes pulse-ring {
+      0%   { box-shadow: 0 0 0 0 rgba(234,179,8,.5); }
+      70%  { box-shadow: 0 0 0 8px rgba(234,179,8,0); }
+      100% { box-shadow: 0 0 0 0 rgba(234,179,8,0); }
+    }
+    .node-pulse { animation: pulse-ring 2s ease-out infinite; }
+  </style>
+  <script>
+    function toggleDetail(row, requestId, targetId) {
+      var target = document.getElementById(targetId);
+      var chevron = row.querySelector('.chevron-icon');
+      if (target.style.display === 'table-row') {
+        target.style.display = 'none';
+        if (chevron) chevron.classList.remove('chevron-open');
+      } else {
+        target.style.display = 'table-row';
+        if (chevron) chevron.classList.add('chevron-open');
+        if (!target.dataset.loaded) {
+          target.innerHTML = '<td colspan="99"><div class="px-6 py-4 text-gray-400 text-sm">Loading details...</div></td>';
+          fetch('/admin/requests/' + encodeURIComponent(requestId) + '/detail', { credentials: 'same-origin' })
+            .then(function(r) { return r.text(); })
+            .then(function(html) { target.innerHTML = html; target.dataset.loaded = '1'; })
+            .catch(function() { target.innerHTML = '<td colspan="99"><div class="px-6 py-4 text-red-500 text-sm">Failed to load details</div></td>'; });
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <!-- Nav -->
+  <nav class="bg-gray-900 text-white shadow-lg">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-6">
+        <span class="text-lg font-bold">Arcana Access Control</span>
+        <a href="/admin" class="text-gray-300 hover:text-white text-sm {% block nav_dashboard %}{% endblock %}">Dashboard</a>
+        <a href="/admin/rules" class="text-gray-300 hover:text-white text-sm {% block nav_rules %}{% endblock %}">Rules</a>
+        <a href="/admin/groups" class="text-gray-300 hover:text-white text-sm {% block nav_groups %}{% endblock %}">Groups</a>
+        <a href="/admin/teams" class="text-gray-300 hover:text-white text-sm {% block nav_teams %}{% endblock %}">Teams</a>
+        <a href="/admin/catalog" class="text-gray-300 hover:text-white text-sm {% block nav_catalog %}{% endblock %}">Catalog</a>
+        <a href="/admin/history" class="text-gray-300 hover:text-white text-sm {% block nav_history %}{% endblock %}">History</a>
+      </div>
+      <div class="flex items-center gap-4 text-sm">
+        <span class="text-gray-400">{{ user }}</span>
+        <a href="/admin/logout" class="text-gray-400 hover:text-white">Logout</a>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Content -->
+  <main class="max-w-7xl mx-auto px-4 py-6">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Force-approve / Rerun password modal -->
+  <div id="force-modal" class="hidden fixed inset-0 z-50 bg-black/50 flex items-center justify-center" onclick="if(event.target===this)closeForceModal()">
+    <div class="bg-white rounded-lg shadow-xl p-6 w-96">
+      <h3 class="font-bold text-lg mb-2">⚠️ Confirm Action</h3>
+      <p id="force-modal-desc" class="text-sm text-gray-600 mb-4"></p>
+      <form id="force-modal-form" method="POST">
+        <input type="password" name="force_password" placeholder="Enter force password"
+               class="w-full border border-gray-300 rounded px-3 py-2 mb-4 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent" required>
+        <div class="flex justify-end gap-2">
+          <button type="button" onclick="closeForceModal()"
+                  class="px-4 py-2 text-gray-600 border border-gray-300 rounded hover:bg-gray-50">Cancel</button>
+          <button type="submit"
+                  class="px-4 py-2 bg-red-600 text-white rounded font-medium hover:bg-red-700">Confirm</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script>
+  function openForceModal(actionUrl, description) {
+    document.getElementById('force-modal-form').action = actionUrl;
+    document.getElementById('force-modal-desc').textContent = description;
+    document.getElementById('force-modal').classList.remove('hidden');
+    var inp = document.querySelector('#force-modal input[name="force_password"]');
+    inp.value = '';
+    setTimeout(function(){ inp.focus(); }, 100);
+  }
+  function closeForceModal() {
+    document.getElementById('force-modal').classList.add('hidden');
+  }
+  </script>
+</body>
+</html>
